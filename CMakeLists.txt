@@ -6,8 +6,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(gptbridge
+add_executable(gptb
     src/main.cpp
 )
 
-target_include_directories(gptbridge PRIVATE include)
+target_include_directories(gptb PRIVATE include)
