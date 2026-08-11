@@ -78,24 +78,35 @@ std::string getCurrentSessionId() {
 
 
 /**
+ * getCurrentSessionDirectory()
+ * Returns the directory used to store data for the current session
+ */
+std::filesystem::path getCurrentSessionDirectory() {
+    // Global mode keeps all shared session data in one dedicated directory
+    if(getSessionMode() == SessionMode::Global) {
+        return getStorageRoot() / "global-session";
+    }
+
+    // Per-terminal mode gives each terminal its own directory so all
+    // state belonging to that session can be stored together
+    return getStorageRoot() / "sessions" / getCurrentSessionId();
+}
+
+
+/**
  * getCurrentSessionPath()
- * Returns the JSON file used to store the active session state.
- * Global mode uses one shared file, while per-terminal mode uses a
- * separate file based on the current terminal's session ID.
+ * Returns the state.json file stored inside the current session directory
  */
 std::filesystem::path getCurrentSessionPath() {
-    // Global mode shares one session file across all terminals
-    if(getSessionMode() == SessionMode::Global) {
-        return getStorageRoot() / "global-session.json";
-    }
-    // Per-terminal mode keeps independent state for each terminal
-    const std::filesystem::path sessionsDir = getStorageRoot() / "sessions";
+    // Keep the session directory as the single source of thruth for where
+    // all files belonging to the current session are stored
+    const std::filesystem::path sessionsDir = getCurrentSessionDirectory();
 
-    // Create the sessions directory on first use
+    // Create the sessions directory before it is written
     std::filesystem::create_directories(sessionsDir);
 
-    // Use the terminal device name as the per-terminal session file name
-    return sessionsDir / (getCurrentSessionId() + ".json");
+    // Store session state in a fixed file inside the session directory
+    return sessionsDir / "state.json";
 }
 
 
@@ -113,21 +124,22 @@ std::vector<SessionInfo> listSessions() {
     }
     std::vector<SessionInfo> sessions;
 
-    // Inspect each file under ~/.gptbridge/sessions/.
+    // Inspect each saved per-terminal session directory
     for(const auto& entry : std::filesystem::directory_iterator(sessionsDir)) {
-        // Ignore directories or other non-file entries
-        if(!entry.is_regular_file()) {
+        // Each saved session is represented by its own directory
+        if(!entry.is_directory()) {
             continue;
         }
 
-        const std::filesystem::path path = entry.path();
+        const std::filesystem::path sessionDir = entry.path();
+        const std::filesystem::path statePath = sessionDir / "state.json";
 
-        // Session files use names such as "ttys007.json"
-        if(path.extension() != ".json") {
+        // Ignore incomplete session directories that do not contain state.json
+        if(!std::filesystem::exists(statePath)) {
             continue;
         }
 
-        std::ifstream input(path);
+        std::ifstream input(statePath);
 
         if(!input) {
             throw std::runtime_error("Failed to open session file for reading");
@@ -140,12 +152,14 @@ std::vector<SessionInfo> listSessions() {
             input >> session;
         }
         catch(const nlohmann::json::parse_error&) {
-            throw std::runtime_error("Failed to parse session file: " + path.filename().string());
+            throw std::runtime_error("Failed to parse session file: " + statePath.string());
         }
 
         SessionInfo info;
-        // The file name identifies the terminal session, e.g. "ttys007"
-        info.id = path.stem().string();
+
+        // The directory name identifies the terminal session, e.g. "ttys007"
+        info.id = sessionDir.filename().string();
+
         // A session may exist before any project has been selected
         if(session.contains("active_project")) {
             info.activeProject = session.at("active_project").get<std::string>();

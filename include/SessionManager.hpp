@@ -39,8 +39,15 @@ std::string getActiveProject();
 
 
 /**
+ * getCurrentSessionDirectory()
+ * Returns the directory used to store state for the current session
+ */
+std::filesystem::path getCurrentSessionDirectory();
+
+
+/**
  * getCurrentSessionPath()
- * Returns the JSON file used to store state for the current terminal session
+ * Returns the JSON file used to store state for the current session
  */
 std::filesystem::path getCurrentSessionPath();
 
