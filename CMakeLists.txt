@@ -22,6 +22,7 @@ add_executable(gptb
     src/main.cpp
     src/Config.cpp
     src/CommandLine.cpp
+    src/InteractionHistory.cpp
     src/ProjectManager.cpp
     src/Storage.cpp
     src/SessionManager.cpp
