@@ -19,15 +19,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(gptb
-    src/main.cpp
+    src/CaptureCoordinator.cpp
     src/Config.cpp
     src/CommandLine.cpp
     src/InteractionHistory.cpp
+    src/main.cpp
     src/ProjectManager.cpp
     src/PtyCaptureBackend.cpp
     src/Storage.cpp
     src/SessionManager.cpp
+    src/SessionNonce.cpp
 )
 
 target_include_directories(gptb PRIVATE include)
-target_link_libraries(gptb PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(gptb PRIVATE
+    nlohmann_json::nlohmann_json
+    "-framework Security"
+)
