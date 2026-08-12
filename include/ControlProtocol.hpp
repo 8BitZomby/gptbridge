@@ -1,6 +1,7 @@
 #ifndef GPTB_CONTROL_PROTOCOL_HPP
 #define GPTB_CONTROL_PROTOCOL_HPP
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -67,11 +68,32 @@ using ControlEvent = std::variant <CommandStartedEvent, CommandFinishedEvent>;
  * the current capture session are accepted by the parser.
  */
 namespace ControlProtocol {
-    // Begins a gptbridge control frame. Ther per-session nonce and payload
-    // length follow this prefix before the encoded event payload.
-    inline constexpr std::string_view framePrefix = "\x1b]GPTB;";
 
-    // Terminates a complete control frame after its length-delimited payload.
+    // Fixed byte sequences that mark the beginning and end of a gptbridge
+    // control frame inside the shared PTY output stream
+    inline constexpr std::string_view framePrefix = "\x1b]GPTB;";
     inline constexpr std::string_view frameTerminator = "\x1b\\";
+
+    // Separates variable-length fields inside the control-frame header
+    inline constexpr char fieldSeparator = ';';
+
+    // Prevents malformed or hostile frames from declaring unreasonably large
+    // JSON payload and forcing the parser to buffer excessive amounts of data
+    inline constexpr std::size_t maxPayloadSize = 1024 * 1024;
+
+    // JSON field names used inside control-frame payloads. Keeping them
+    // centralized avoid repeating protocol string literals throughout
+    // the parser and shell-size frame generator
+    inline constexpr std::string_view typeField = "type";
+    inline constexpr std::string_view interactionIdField = "interaction_id";
+    inline constexpr std::string_view commandField = "command";
+    inline constexpr std::string_view startedAtField = "started_at";
+    inline constexpr std::string_view workingDirectoryField = "working_directory";
+    inline constexpr std::string_view exitCodeField = "exit_code";
+    inline constexpr std::string_view finishedAtField = "finished_at";
+
+    // Values stored in the "type" field to distinguish command lifecycle events
+    inline constexpr std::string_view commandStartedType = "command_started";
+    inline constexpr std::string_view commandFinishedType = "command_finished";
 }
 #endif

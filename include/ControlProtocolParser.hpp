@@ -44,12 +44,58 @@ class ControlProtocolParser {
         void consume(std::string_view bytes);
 
     private:
-        // None/session token required for control frames in this capture
+        // Nonce/session token required for control frames in this capture
         std::string sessionNonce;
         // Receives ordinary terminal bytes
         OutputHandler outputHandler;
         // Receives successfully decoded control events
         EventHandler eventHandler;
+
+        /**
+         * partialPrefixLength()
+         * Returns the number of trailing bytes in pendingBytes that could be
+         * the beginning of a control-frame prefix split actoss PTY reads
+         */
+        std::size_t partialPrefixLength() const;
+
+        /**
+         * FrameParseResult
+         * Describes what happened when pendingBytes was examined for a control
+         * frame beginning at its first byte
+         */
+        enum class FrameParseResult {
+            Consumed,       // A complete valid control fram was parsed and removed
+            Incomplete,     // The candidate may be valid, but more PTY bytes are needed
+            NotControlFrame // The bytes do not belong to this capture session
+        };
+
+        /**
+         * tryParseFrame()
+         * Examines a control-frame candidate beginning at the start of pendingBytes.
+         * The result distinguishes a complete frame, and incomplete frame, and bytes
+         * that only resemble the protocol prefix but are not valid for this session
+         */
+        FrameParseResult tryParseFrame();
+
+        /**
+         * parsePayloadLength()
+         * Converts and validates the payload-length field from a control header
+         */
+        std::size_t parsePayloadLength(std::size_t lengthStart, std::size_t lengthEnd) const;
+
+        /**
+         * emitOutput()
+         * Sends ordinary terminal bytes to the configured output handler
+         */
+        void emitOutput(std::string_view bytes);
+
+        /**
+         * parseFrame()
+         * Attempts to decode one complete gptbridge control-frame payload and
+         * deliver the resulting semantic event to the configured event handler.
+         */
+        void parseFrame(std::string_view payload);
+
         // Holds bytes that cannot yet be classified because a control frame
         // may be split across multiple PTY reads
         std::string pendingBytes;
