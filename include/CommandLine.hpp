@@ -5,15 +5,16 @@
 
 
 enum class Command {
-    Status,
     Add,
-    List,
-    Remove,
-    Use,
-    Show,
+    Capture,
     Clear,
+    List,
     Push,
+    Remove,
     Session,
+    Show,
+    Status,
+    Use,
     Unknown
 };
 

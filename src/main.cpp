@@ -1,6 +1,8 @@
 #include "CommandLine.hpp"
 #include "Config.hpp"
+#include "InteractionHistory.hpp"
 #include "ProjectManager.hpp"
+#include "PtyCaptureBackend.hpp"
 #include "SessionManager.hpp"
 #include "Storage.hpp"
 
@@ -27,44 +29,6 @@ int main(int argc, char* argv[]) {
         // Command handler may throw for malformed JSON, filesystem failures,
         // or other storage errors. Handle those at the CLI boundary below.
         switch(command) {
-
-            case Command::Status: {
-                std::cout << "gptbridge status\n";
-                std::cout << "Storage root: " << getStorageRoot() << '\n';
-
-                // Resolve the session mode before inspecting mode-specific state
-                const SessionMode sessionMode = getSessionMode();
-                
-                // Show whether active-project state is shared or terminal-specific
-                std::cout << "Session mode: " << sessionModeToString(sessionMode) << '\n';
-                
-                // A terminal ID is relevant only when session state is per-terminal
-                if(sessionMode == SessionMode::PerTerminal) {
-                    std::cout << "Session ID: " << getCurrentSessionId() << '\n';
-
-                }
-
-                // Read the project currently selected for this terminal session
-                const std::string activeProject = getActiveProject();
-
-                if(activeProject.empty()) {
-                    std::cout << "Active project: none\n";
-                }
-                else {
-                    // A session can outlive a project entry, so verify the saved
-                    // active-project name still exists in the global project registry
-                    if(!projectExists(activeProject)) {
-                        std::cout << "Active project: " << activeProject << " (not registered)\n";
-                        return 0;
-                    }
-
-                    // Resolve the saved root path only after confirming the project exists
-                    const std::filesystem::path activeProjectPath = getProjectPath(activeProject);
-                    std::cout << "Active project: " << activeProject << '\n';
-                    std::cout << "Project path: " << activeProjectPath.string() << '\n';
-                }
-                return 0;
-            }
 
             case Command::Add: {
                 // "gptb add project <name> <path>" requires three args after top-level "add"
@@ -95,6 +59,21 @@ int main(int argc, char* argv[]) {
                 std::cout << "Project path: " << projectPath.string() << '\n';
                 return 0;
             }
+
+
+            // ---- TEST FEATURE ONLY ---- //
+            case Command::Capture: {
+                // "gptb capture" launches an interactive shell through the PTY backend
+                if(argc != 2) {
+                    std::cout << "Usage: gptb capture\n";
+                    return 1;
+                }
+                PtyCaptureBackend backend;
+                backend.run();
+                return 0;
+            }
+
+
 
             case Command::List: {
                 // "gptb list <type>" currently supports projects and saved sessions
@@ -176,6 +155,44 @@ int main(int argc, char* argv[]) {
                 }
 
                 std::cout << "Session mode: " << sessionModeToString(getSessionMode()) << '\n';
+                return 0;
+            }
+
+            case Command::Status: {
+                std::cout << "gptbridge status\n";
+                std::cout << "Storage root: " << getStorageRoot() << '\n';
+
+                // Resolve the session mode before inspecting mode-specific state
+                const SessionMode sessionMode = getSessionMode();
+
+                // Show whether active-project state is shared or terminal-specific
+                std::cout << "Session mode: " << sessionModeToString(sessionMode) << '\n';
+
+                // A terminal ID is relevant only when session state is per-terminal
+                if(sessionMode == SessionMode::PerTerminal) {
+                    std::cout << "Session ID: " << getCurrentSessionId() << '\n';
+
+                }
+
+                // Read the project currently selected for this terminal session
+                const std::string activeProject = getActiveProject();
+
+                if(activeProject.empty()) {
+                    std::cout << "Active project: none\n";
+                }
+                else {
+                    // A session can outlive a project entry, so verify the saved
+                    // active-project name still exists in the global project registry
+                    if(!projectExists(activeProject)) {
+                        std::cout << "Active project: " << activeProject << " (not registered)\n";
+                        return 0;
+                    }
+
+                    // Resolve the saved root path only after confirming the project exists
+                    const std::filesystem::path activeProjectPath = getProjectPath(activeProject);
+                    std::cout << "Active project: " << activeProject << '\n';
+                    std::cout << "Project path: " << activeProjectPath.string() << '\n';
+                }
                 return 0;
             }
 

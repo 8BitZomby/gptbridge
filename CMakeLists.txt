@@ -24,6 +24,7 @@ add_executable(gptb
     src/CommandLine.cpp
     src/InteractionHistory.cpp
     src/ProjectManager.cpp
+    src/PtyCaptureBackend.cpp
     src/Storage.cpp
     src/SessionManager.cpp
 )
