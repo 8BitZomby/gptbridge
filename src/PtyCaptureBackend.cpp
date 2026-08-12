@@ -113,6 +113,43 @@ class TerminalModeGuard {
 };
 
 
+/**
+ * FileDescriptorGuard
+ * Owns one POSIX file descriptor and closes it automatically when the guard
+ * goes out of scope. This prevents descriptor leaks on normal returns and exceptions
+ */
+class FileDescriptorGuard {
+    public:
+        // Takes ownership of the supplied descriptor
+        // Explicit prevents an int from being implicitly
+        // converted into a FileDescriptorGuard
+        explicit FileDescriptorGuard(int fd) : fd(fd) {}
+
+        // Close the owned descriptor when the guard is destroyed
+        ~FileDescriptorGuard() {
+            if(fd != -1) {
+                close(fd);
+            }
+        }
+
+        // Return the descriptor so it can be passed to POSIX functions
+        int get() const {
+            return fd;
+        }
+
+        // Close the descriptor early and mark the guard as empty so the
+        // destructor does not attempt to close the same descriptor again
+        void closeNow() {
+            if(fd != -1) {
+                close(fd);
+                fd = -1;
+            }
+        }
+    private:
+        // -1 represents that this guard currently owns no valid desctiptor
+        int fd;
+};
+
 
 /**
  * writeAll() - run() helper
@@ -153,6 +190,301 @@ void writeAll(int fd, const char* buffer, std::size_t byteCount) {
 }
 
 
+/**
+ * getTerminalSize()
+ * Reads and returns the current row and column dimension of the real terminal
+ */
+winsize PtyCaptureBackend::getTerminalSize() const {
+    // Value-initialize the structure before asking the terminal driver to fill it
+    winsize terminalSize{};
+
+    // TIOCGWINSZ copies the current terminal dimensions into terminalSize
+    if(ioctl(STDIN_FILENO, TIOCGWINSZ, &terminalSize) == -1) {
+        throw std::runtime_error("Failed to read terminal window size");
+    }
+    return terminalSize;
+}
+
+
+/**
+ * updatePtyWindowSize
+ * Reads the real terminal's current dimensions and applies them to
+ * the pseudo-terminal used by the child shell
+ */
+void PtyCaptureBackend::updatePtyWindowSize(int masterFd) {
+    // Reuse the same terminal-size lookup used during initial PTY creation
+    winsize terminalSize = getTerminalSize();
+
+    // TIOCSWINSZ applies the new row and column values to the child PTY
+    if(ioctl(masterFd, TIOCSWINSZ, &terminalSize) == -1) {
+        throw std::runtime_error("Failed to update PTY window size");
+    }
+}
+
+
+/**
+ * runChildShell()
+ * Replaces the forked child process with the user's configured interactive
+ * shell. This function never returns to caller:
+ *   - if execl() succeeds, the process image is replaced
+ *   - if setup or execl() fails, we call _exit()
+ */
+[[noreturn]] void PtyCaptureBackend::runChildShell() {
+    // SHELL normall contains the path to the user's configured shell,
+    // for example "/bin/zsh" on macOS
+    const char* shell = std::getenv("SHELL");
+
+    // Without a shell path, the child cannot start an interactive shell
+    if(shell == nullptr) {
+        _exit(1);
+    }
+
+    // Replace the child process with the configured shell in interactive mode
+    execl(
+        shell,                          // Executable path
+        shell,                          // argv[0], conventionally the program path/name
+        "-i",                           // Start the shell interactively
+        static_cast<char*>(nullptr)     // Marks the end of the argument list
+    );
+
+    // Reaching this point means execl() failed. _exit() terminates only the
+    // child process without running parent-side cleanup code
+    _exit(1);
+}
+
+
+/**
+ * forwardTerminalInput()
+ * Reads one available chunk from the real terminal and forwards those bytes
+ * to the child PTY. Returns false when stdin reaches EOF
+ */
+bool PtyCaptureBackend::forwardTerminalInput(int masterFd) {
+    // Temporary buffer used to receive bytes from the real terminal
+    char buffer[4096];
+
+    // Read whatever input is currently available from standard input
+    const ssize_t bytesRead = read(
+        STDIN_FILENO,                       // Read from the real terminal
+        buffer,                             // Store received bytes here
+        sizeof(buffer)                      // Do not read beyond the buffer
+    );
+
+    // A negative result means the read operation failed
+    if(bytesRead == -1) {
+        // EINTR means a signal interrupted the read, so the session can continue
+        if(errno == EINTR) {
+            return true;
+        }
+
+        // Any other error means terminal input can no longer be read reliably
+        throw std::runtime_error("Failed to read terminal input");
+    }
+
+    // Zero means stdin reached EOF, so there is no more input to forward
+    if(bytesRead == 0) {
+        return false;
+    }
+
+    // Forward exactly the bytes read from the real terminal into the PTY master
+    writeAll(
+        masterFd,
+        buffer,
+        static_cast<std::size_t>(bytesRead)
+    );
+
+    return true;
+}
+
+
+/**
+ * forwardPtyOutput()
+ * Reads one available chunk from the child PTY and forwards those bytes to
+ * the real terminal. Returns false when the PTY output stream has ended
+ */
+bool PtyCaptureBackend::forwardPtyOutput(int masterFd) {
+    // Temporary buffer used to receive output bytes from the child PTY
+    char buffer[4096];
+
+    // Read whatever output is currently available from the PTY master
+    //
+    // Anything written by zsh or one of its child programs to the PTY slave
+    // becomes readble by the parent through masterFd
+    const ssize_t bytesRead = read(
+            masterFd,       // Read from the parent side of the pseudo-terminal
+            buffer,         // Store the received terminal bytes in this buffer
+            sizeof(buffer)  // Read at most one buffer-sized chunk at a time
+    );
+
+    // A negative result means the read operation itself failed
+    if(bytesRead == -1) {
+
+        // EINTR means a signal interrupted the read, so the session can continue
+        if(errno == EINTR) {
+            return true;
+        }
+
+        // EIO can indicate that the PTY slave has closed, which is a normal
+        // end-of-session condition for the forwarding loop
+        if(errno == EIO) {
+            return false;
+        }
+
+        // Any other error means PTY output can no longer be read reliably
+        throw std::runtime_error("Failed to read PTY output");
+    }
+
+    // Zero means the PTY output stream has reached EOF
+    if(bytesRead == 0) {
+        return false;
+    }
+
+    // Forward the bytes produced by the child PTY to the real terminal
+    //
+    // This is what makes output from the child shell visible in the terminal
+    // where gptb itself is running
+    writeAll(
+            STDOUT_FILENO,                      // Destination: parent side of the child PTY
+            buffer,                             // Bytes just read from the real terminal
+            static_cast<std::size_t>(bytesRead) // Number of valid bytes currently stored in buffer
+    );
+
+    return true;
+}
+
+
+/**
+ * waitForChild()
+ * Waits for the shell process created by forkpty() to terminate and collects
+ * its status so it does not remain as a zombie process
+ */
+void PtyCaptureBackend::waitForChild(pid_t childPid) {
+
+    // Receives the encoded termination status reported by waitpid()
+    int childStatus = 0;
+
+    // waitpid() waits specifically for the child created by forkpyt().
+    const pid_t waitResult = waitpid(
+            childPid,       // PID of the child shell to collect
+            &childStatus,   // Receives the child's encoded termination status
+            0               // Block until the child reaches a waitable state
+    );
+
+    // -1 means waitpid() itself failed
+    if(waitResult == -1) {
+        throw std::runtime_error("Failed to wait for child shell");
+    }
+}
+
+
+/**
+ * createPollDescriptors()
+ * Builds the two descriptors monitored during the forwarding loop:
+ * real-terminal input and output arriving from the child PTY
+ */
+std::array<pollfd, 2> PtyCaptureBackend::createPollDescriptors(int masterFd) const {
+
+    std::array<pollfd, 2> descriptors{};
+
+    // Descriptor 0 watches keyboard/input arriving from the real terminal
+    descriptors[0].fd = STDIN_FILENO;
+    descriptors[0].events = POLLIN; // POLLIN tells us when descriptor has data available to read
+    descriptors[0].revents = 0;     // poll fills revents to report which events occured
+
+    // Descriptor 1 watches output produced by the child through the PTY master
+    descriptors[1].fd = masterFd;
+    descriptors[1].events = POLLIN;
+    descriptors[1].revents = 0;
+
+    return descriptors;
+}
+
+
+/**
+ * waitForPollEvents()
+ * Blocks until poll() reports activity on one or more monitored descriptors.
+ *
+ * poll() waits on every descriptor in the supplied array and returns:
+ *   -1  ->  error
+ *    1  ->  one monitored descriptor has an event
+ *    2  ->  both monitored descriptors have events
+ *
+ *  When poll() suceeds, each descriptor's revents field identifies which
+ *  events occured. If poll() is interrupted by a signal (EINTR), this helper
+ *  returns false so the caller can safely retry the forwarding loop
+ */
+bool PtyCaptureBackend::waitForPollEvents(std::array<pollfd, 2>& descriptors) const {
+    // Wait indefinitely for activity on either terminal input or PTY output
+    const int pollResult = poll(
+            descriptors.data(), // Pointer to first pollfd entry
+            descriptors.size(), // Number of descriptors being monitored
+            -1                  // Block indefinitely until an event occurs
+    );
+
+    // A negative result means poll() itself failed
+    if(pollResult == -1) {
+        // EINTR means a signal interrupted poll() before an event was reported.
+        // Nothing is wrong with the descriptors, so restart the polling loop.
+        if(errno == EINTR) {
+            return false;
+        }
+
+        // Any other poll error means reliable descriptor monitoring cannot continue
+        throw std::runtime_error("Failed while polling terminal descriptors");
+    }
+
+    // Successful poll() leaves the actual events in each descriptor's revents field
+    return true;
+}
+
+
+/**
+ * checkDescriptorConditions()
+ * Examines descriptor conditions reported by poll(). Invalid descriptors and
+ * I/O errors are treated as failures, while normal hangups signal that the
+ * forwarding session should end
+ */
+PtyCaptureBackend::DescriptorCondition PtyCaptureBackend::checkDescriptorConditions(const std::array<pollfd, 2>& descriptors) const {
+
+    // -- Invalid Descriptor Checks -- //
+    // POLLNVAL means the real-terminal input descriptor itself is invalid
+    if(descriptors[0].revents & POLLNVAL) {
+        throw std::runtime_error("Terminal input file descriptor is invalid");
+    }
+    // POLLNVAL on the PTY master means the descriptor is invalid
+    // POLLNVAL -> our fd itself is invalid -> error
+    if(descriptors[1].revents & POLLNVAL) {
+        throw std::runtime_error("PTY master file descriptor is invalid");
+    }
+
+    // -- Error checks -- //
+    // POLLERR on stdin means the kernel reported an error condition while
+    // monitoring input from the real terminal
+    if(descriptors[0].revents & POLLERR) {
+        throw std::runtime_error("Terminal input reported an error");
+    }
+    // POLLERR means the kernel detected an error condition on the PTY master.
+    // The descriptor can no longer be assumed to support reliable forwarding.
+    // POLLERR -> kernel reports an I/O condition -> error
+    if(descriptors[1].revents & POLLERR) {
+        throw std::runtime_error("PTY master reported an error");
+    }
+
+    // -- Hangup checks -- //
+    // POLLHUP on stdin means the real terminal input side has been closed.
+    // No further user input can arrive, so the forwarding sesion should end
+    if(descriptors[0].revents & POLLHUP) {
+        return DescriptorCondition::EndSession;
+    }
+    // POLLHUP means the process connected to the PTY slave has closed its side
+    // of the terminal. No future terminal traffic can arrive from that session
+    // POLLHUP -> child closed its PTY side -> session ends normally
+    if(descriptors[1].revents & POLLHUP) {
+        return DescriptorCondition::EndSession;
+    }
+
+    return DescriptorCondition::Continue;
+}
+
 
 /**
  * run()
@@ -182,15 +514,8 @@ void PtyCaptureBackend::runSession() {
     // for the parent process. -1 is used as an invalid value.
     int masterFd = -1;
 
-    // Read the dimensions of the real terminal so the child PTY sharts with
-    // the same number of rows and columns seen by the user
-    winsize terminalSize{};
-
-    // TIOCGWINSZ asks the terminal driver to copy the current window size
-    // into terminalSize
-    if(ioctl(STDIN_FILENO, TIOCGWINSZ, &terminalSize) == -1) {
-        throw std::runtime_error("Failed to read terminal window size");
-    }
+    // Match the child PTY's initial dimensions to the real terminal
+    winsize terminalSize = getTerminalSize();
 
     // forkpty() performs both PTY creation and process creation
     //
@@ -215,35 +540,12 @@ void PtyCaptureBackend::runSession() {
 
     // A return value of 0 means this is the created child process
     if(childPid == 0) {
-        // SHELL normally contains the path to the user's configured shell,
-        // for example "/bin/zsh" on macOS.
-        const char* shell = std::getenv("SHELL");
-
-        // Without a shell path, the child cannot start an interactive shell
-        if(shell == nullptr) {
-            _exit(1);
-        }
-
-        // execl() replaces this child process with the shell process.
-        //
-        // Arguments:
-        //   shell   -> executable path
-        //   shell   -> argv[0], conventionally the program name/path
-        //   "-i"    -> request interactive shell mode
-        //   nullptr -> marks the end of the argument list
-        //
-        // If execl() succeeds, execution never returns to this function
-        execl(
-                shell,
-                shell,
-                "-i",
-                static_cast<char*>(nullptr)
-        );
-
-        // Reaching this line means execl() failed
-        // _exit() terminates only the child process immediately
-        _exit(1);
+        runChildShell();
     }
+
+    // The parent owns the PTY master descriptor from this point onward.
+    // The guard closes it automatically on every return or exception path
+    FileDescriptorGuard masterDescriptor(masterFd);
 
     // Reaching this point means we are in the parent process
     //
@@ -261,24 +563,9 @@ void PtyCaptureBackend::runSession() {
     //
     // pollfd stores both the file descriptor to watch and the kinds of
     // events the parent is interested in receiving from that descriptor
-    pollfd descriptors[2];
 
-    // Descriptor 0 watches the parent's stdin. In an interactive
-    // terminal this is where keyboard input becomes available to gptb
-    descriptors[0].fd = STDIN_FILENO;
-
-    // POLLIN means "tell us when this descriptor has data available to read"
-    descriptors[0].events = POLLIN;
-
-    // revents is filled in by poll() to report which events actually occurred.
-    // Initialize it to zero before the first poll
-    descriptors[0].revents = 0;
-
-    // Descriptor 1 watches the PTY master. Data becomes available here when
-    // zsh or one of its child programs writes output to the PTY slave
-    descriptors[1].fd = masterFd;
-    descriptors[1].events = POLLIN;
-    descriptors[1].revents = 0;
+    // Prepare the real-terminal and PTY descriptors monitored by poll()
+    std::array<pollfd, 2> descriptors = createPollDescriptors(masterDescriptor.get());
 
     // Keep gptb's SIGWINCH handler installed for the lifetime of the PTY
     // session. The guard restores the process's previous signal action
@@ -292,222 +579,54 @@ void PtyCaptureBackend::runSession() {
         // The SIGWINCH handler sets windowSizeChanged when the real terminal is
         // resized. Perform the actual resize here in normal program execution
         if(windowSizeChanged) {
-            // Clear the flag now that this resize notification is being handled
+
+            // Clear the signal flag before handling the resize in normal execution
             windowSizeChanged = 0;
 
-            // Read the real terminal's new number of rows and columns
-            // TIOCGWINSZ - Gets the current size
-            winsize newTerminalSize{};
-            if(ioctl(STDIN_FILENO, TIOCGWINSZ, &newTerminalSize) == -1) {
-                throw std::runtime_error("Failed to read updated terminal window size");
-            }
-            // Apply the new dimensions to the PTY used by the child shell
-            // TIOCSWINSZ - sets the current size
-            if(ioctl(masterFd, TIOCSWINSZ, &newTerminalSize) == -1) {
-                throw std::runtime_error("Failed to update PTY window size");
-            }
+            // Synchronize the child PTY with the real terminal's latest dimensions
+            updatePtyWindowSize(masterDescriptor.get());
         }
-        // poll() blocks the parent until at least one watched descriptor has
-        // and event we asked for, or until an error occurs
-        //   If you press a key, STDIN_FILNO may become readable
-        //   If zsh prints something, masterFd may become readble
-        // Poll returns a positive number telling us how many descriptors have events pending.
-        // Then we inspect each descriptor's revents field to find out which one woke up.
-        //   pollResult == -1 -> error
-        //   pollResult == 1  -> one watch descriptor has an event
-        //   pollResult == 2  -> both watched descriptors have events
-        const int pollResult = poll(
-                descriptors,    // Array of descriptors we want the kernel to monitor
-                2,              // Number of entries in the array
-                -1              // -1 means wait indefinitely until an event occurs
-        );
 
-        // A negative result means poll() itself failed
-        if(pollResult == -1) {
-            // EINTR means a signal interrupted poll() before an event was reported.
-            // Nothing is wrong with the descriptors, so restart the polling loop.
-            if(errno == EINTR) {
-                continue;
-            }
-
-            // Any other error means the parent can no longer reliably monitor the
-            // terminal descriptors, so the PTY session cannot safely continue
-            throw std::runtime_error("Failed while polling terminal descriptors");
+        // Wait for terminal or PTY activity. A signal interruption restarts the
+        // forwarding loop so resize and other signa;-driven state can be handled
+        if(!waitForPollEvents(descriptors)) {
+            continue;
         }
 
         // revents contains the events that actually occurred on each descriptor.
         // Check stdin first to see whether the real terminal has input available
         if(descriptors[0].revents & POLLIN) {
             // Keyboard or other terminal input is ready to be read from stdin
-
-            // Temporary buffer used to receive bytes from the real terminal
-            char buffer[4096];
-
-            // Read whatever input is currently available from standard input
-            const ssize_t bytesRead = read(
-                    STDIN_FILENO,   // Read from the real terminal's standard input
-                    buffer,         // Store the received bytes in this buffer
-                    sizeof(buffer)  // Do not read more bytes than the buffer can hold
-            );
-
-            // A negative result means the read operation itself failed
-            if(bytesRead == -1) {
-                // EINTR means a signal interrupted the read before input was returned.
-                // Restart the outer polling loop and wait for terminal activity again.
-                if(errno == EINTR) {
-                    continue;
-                }
-                // Any other error means terminal input can no longer be read reliably
-                throw std::runtime_error("Failed to read terminal input");
-            }
-
-            // A result of zero means the real terminal input has reached EOF.
-            // Close the PTY master so the child shell loses its terminal connection
-            // and can terminate before the parent later collects it with waitpid()
-            if(bytesRead == 0) {
-                close(masterFd);
-                masterFd = -1;
+            // Forward available real-terminal input to the child PTY
+            if(!forwardTerminalInput(masterDescriptor.get())) {
+                masterDescriptor.closeNow();
                 sessionRunning = false;
                 continue;
             }
-
-            // Forward exactly the bytes we received into the PTY master
-            //
-            // Data written to the master becomes input on the PTY slave,
-            // which is where the child shell is attached
-            writeAll(
-                    masterFd,
-                    buffer,
-                    static_cast<std::size_t>(bytesRead)
-            );
         }
+
         // Check the PTY master to see whether the child shell produced output
         if(descriptors[1].revents & POLLIN) {
             // Shell/program output is ready to be read from the PTY master
-
-            // Temporary buffer used to receive output bytes from the child PTY
-            char buffer[4096];
-
-            // Read whatever output is currently available from the PTY master
-            //
-            // Anything written by zsh or one of its child programs to the PTY slave
-            // becomes readble by the parent through masterFd
-            const ssize_t bytesRead = read(
-                    masterFd,       // Read from the parent side of the pseudo-terminal
-                    buffer,         // Store the received terminal bytes in this buffer
-                    sizeof(buffer)  // Read at most one buffer-sized chunk at a time
-            );
-
-            // A negative result means the read operation itself failed
-            if(bytesRead == -1) {
-                // EINTR means a signal interrupted the read before output was returned.
-                // Restart the outer polling loop and wait for terminal activity again
-                if(errno == EINTR) {
-                    continue;
-                }
-                // Some PTY implementation report EIO when the slave side has closed.
-                // In that case the child can no longer produce terminal output. Treat
-                // it as the normal end of the PTY forwarding session
-                if(errno == EIO) {
-                    // EIO can indicate that the PTY slave has closed. The master is no
-                    // longer useful, so release the descriptor before ending the session
-                    close(masterFd);
-                    masterFd = -1;
-                    sessionRunning = false;
-                    continue;
-                }
-                // Otherwise, all other errors means PTY output can no longer read reliably
-                throw std::runtime_error("Failed to read PTY output");
-            }
-
-            // A zero-byte read means the PTY has reached EOF. The child side is no
-            // longer producing terminal output, so the forwarding loop can finish
-            if(bytesRead == 0) {
-                // EOF means the child side of the PTY has closed. Release the master
-                // descriptor before leaving the forwarding loop
-                close(masterFd);
-                masterFd = -1;
+            // Forward available child-PTY output to the real terminal
+            if(!forwardPtyOutput(masterDescriptor.get())) {
+                masterDescriptor.closeNow();
                 sessionRunning = false;
                 continue;
             }
-
-            // Forward the bytes from the PTY to the real terminal's standard output
-            //
-            // This is what makes output from the child shell visible in the terminal
-            // where gptb itself is running
-            writeAll(
-                    STDOUT_FILENO,
-                    buffer,
-                    static_cast<std::size_t>(bytesRead)
-            );
         }
 
-        // -- Invalid descriptpors checks -- //
-        // POLLNVAL on stdin means the real terminal input descriptor is invalid
-        if(descriptors[0].revents & POLLNVAL) {
-            throw std::runtime_error("Terminal input file descriptor is invalid");
-        }
-        // POLLNVAL means the file descriptor stored for the PTY master is no longer
-        // valid, so it cannot be used for further terminal communication
-        // POLLNVAL -> our fd itself is invalid -> error
-        if(descriptors[1].revents & POLLNVAL) {
-            throw std::runtime_error("PTY master file descriptor is invalid");
-        }
-
-        // -- Error checks -- //
-        // POLLERR on stdin means the kernel reported an error condition while
-        // monitoring input from the real terminal
-        if(descriptors[0].revents & POLLERR) {
-            throw std::runtime_error("Terminal input reported an error");
-        }
-        // POLLERR means the kernel detected an error condition on the PTY master.
-        // The descriptor can no longer be assumed to support reliable forwarding.
-        // POLLERR -> kernel reports an I/O condition -> error
-        if(descriptors[1].revents & POLLERR) {
-            throw std::runtime_error("PTY master reported an error");
-        }
-
-        // -- Hangup checks -- //
-        // POLLHUP on stdin means the real terminal input side has been closed.
-        // No further user input can arrive, so the forwarding sesion should end
-        if(descriptors[0].revents & POLLHUP) {
-            close(masterFd);
-            masterFd = -1;
+        // Check descriptor error and hangup conditions reported by poll()
+        if(checkDescriptorConditions(descriptors) == DescriptorCondition::EndSession) {
+            // A normal terminal or PTY hangup end the forwarding session
+            masterDescriptor.closeNow();
             sessionRunning = false;
             continue;
-        }
-        // POLLHUP means the process connected to the PTY slave has closed its side
-        // of the terminal. No future terminal traffic can arrive from that session
-        // POLLHUP -> child closed its PTY side -> session ends normally
-        if(descriptors[1].revents & POLLHUP) {
-            close(masterFd);
-            masterFd = -1;
-            sessionRunning = false;
         }
     }
 
     // The live forwarding phase is now over. waitpid() collects the child
     // shell's termination status and prevents it from remaining a zombie
-    int childStatus = 0;
-
-    // Wait specifically for the child originally created by forkpty()
-    //
-    //   childPid: identifies which child the parent wants to collect
-    //
-    //   &childStatus: allows waitpid() to write encoded termination information here
-    //
-    //   0: wait normally until that child reaches a waitable terminated state
-
-    // waitpid() waits specifically for the child created by forkpyt().
-    // A return value of -1 means the wait operation itself failed
-    const pid_t waitResult = waitpid(
-            childPid,       // PID of the specific child process we are waiting for
-            &childStatus,   // Receives the child's termination status
-            0               // Block until the child changes to a waitable state
-    );
-
-    // -1 means waitpid() itself failed
-    if(waitResult == -1) {
-        throw std::runtime_error("Failed to wait for child shell");
-    }
+    // The forwarding session is complete. Collect the child shell process
+    waitForChild(childPid);
 }
