@@ -1,13 +1,19 @@
 #include "PtyCaptureBackend.hpp"
 
+#include "CaptureCoordinator.hpp"
+#include "ControlProtocolParser.hpp"
+#include "SessionNonce.hpp"
+
 #include <cerrno>
 #include <cstdlib>
 #include <poll.h>
 #include <stdexcept>
 #include <signal.h>
+#include <string_view>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <termios.h>
+#include <type_traits>
 #include <unistd.h>
 #include <util.h>
 
@@ -298,10 +304,10 @@ bool PtyCaptureBackend::forwardTerminalInput(int masterFd) {
 
 /**
  * forwardPtyOutput()
- * Reads one available chunk from the child PTY and forwards those bytes to
- * the real terminal. Returns false when the PTY output stream has ended
+ * Reads one available chunk from the child PTY and passes those bytes through
+ * the control-protocol parser. Returns false when the PTY output stream ends.
  */
-bool PtyCaptureBackend::forwardPtyOutput(int masterFd) {
+bool PtyCaptureBackend::forwardPtyOutput(int masterFd, ControlProtocolParser& parser) {
     // Temporary buffer used to receive output bytes from the child PTY
     char buffer[4096];
 
@@ -338,14 +344,13 @@ bool PtyCaptureBackend::forwardPtyOutput(int masterFd) {
         return false;
     }
 
-    // Forward the bytes produced by the child PTY to the real terminal
-    //
-    // This is what makes output from the child shell visible in the terminal
-    // where gptb itself is running
-    writeAll(
-            STDOUT_FILENO,                      // Destination: parent side of the child PTY
-            buffer,                             // Bytes just read from the real terminal
+    // Pass the PTY bytes through the control-protocol parser. The parser will
+    // separate ordinary terminal output from private gptbridge control frames
+    parser.consume(
+        std::string_view(
+            buffer,                             // Bytes just read from the child PTY
             static_cast<std::size_t>(bytesRead) // Number of valid bytes currently stored in buffer
+        )
     );
 
     return true;
@@ -487,6 +492,59 @@ PtyCaptureBackend::DescriptorCondition PtyCaptureBackend::checkDescriptorConditi
 
 
 /**
+ * handleControlEvent()
+ * Dispatches one decoded control event to the matching CaptureCoordinator operation.
+ *  ControlEvent is a std::variant that store exactly one supported event type at a time.
+ *  std::visit extracts the concrete event currently stored in the variant
+ *  so it can be dispatched to the matching CaptureCoordinator method.
+ */
+void PtyCaptureBackend::handleControlEvent(const ControlEvent& event, CaptureCoordinator& captureCoordinator) {
+    // std::visit() calls this lambda with whichever concrete event type
+    // is currently stored inside the ControlEvent variant
+    std::visit(
+        [&captureCoordinator](const auto& concreteEvent) {
+            // decltype() gets the exact parameter type, which includes const and &.
+            // std::decay_t removes those modifiers so only the underlying event
+            // type remains, e.g. CommandStartedEvent or CommandFinishedEvent.
+            // Resolve the concrete event type so the matching coordinator
+            // operation can be selected at compile time
+            using EventType = std::decay_t<decltype(concreteEvent)>;
+
+            // std::is_same_v compares two types at compile time.
+            // if constexpr compiles only the branch matching the current event type.
+            // For the CommandStartedEvent version of this generic lambda,
+            // if constexpr keeps only this branch during compilation.
+            if constexpr (std::is_same_v<EventType, CommandStartedEvent>) {
+                captureCoordinator.commandStarted(
+                    concreteEvent.interactionId,
+                    concreteEvent.command,
+                    concreteEvent.workingDirectory,
+                    concreteEvent.startedAt
+                );
+            }
+
+            // The other supported variant alternative represents command completion.
+            // For the CommandFinishedEvent version of this generic lambda,
+            // if constexpr keeps only this branch during compilation
+            // Runtime determines which variant alternative is currently stored
+            // Compile time determines which branch is valid for each possible event type
+            else if constexpr(std::is_same_v<EventType, CommandFinishedEvent>) {
+                captureCoordinator.commandFinished(
+                    concreteEvent.interactionId,
+                    concreteEvent.exitCode,
+                    concreteEvent.finishedAt
+                );
+            }
+        },
+
+        // The ControlEvent variant whose currently stored value std::visit()
+        // will pass into the lambda above
+        event
+    );
+}
+
+
+/**
  * run()
  * Manages the real terminal's mode for the lifetime of a captured
  * session and delegates the PTY-specific work to runSession()
@@ -517,6 +575,10 @@ void PtyCaptureBackend::runSession() {
     // Match the child PTY's initial dimensions to the real terminal
     winsize terminalSize = getTerminalSize();
 
+    // Generate the per-session nonce used to distinguish legitimate gptbridge
+    // control frames from ordinary terminal output
+    const std::string sessionNonce = generateSessionNonce();
+
     // forkpty() performs both PTY creation and process creation
     //
     // After this call:
@@ -546,6 +608,55 @@ void PtyCaptureBackend::runSession() {
     // The parent owns the PTY master descriptor from this point onward.
     // The guard closes it automatically on every return or exception path
     FileDescriptorGuard masterDescriptor(masterFd);
+
+    // Coordinates command-start, captured-output, and command-finish events
+    // while the PTY session is running
+    CaptureCoordinator captureCoordinator;
+
+    // Handles bytes that the protocol parser identifies as ordinary terminal
+    // output rather than private gptbridge control data
+    // OutputHandler is an alias for std::function<void(std::string_view)>.
+    // It stores any callable object that accepts a string_view and returns nothing
+    ControlProtocolParser::OutputHandler outputHandler =
+        // This lambda provides the callable stored inside OutputHandler
+        //
+        // [&captureCoordinator] captures the existing CaptureCoordinator by
+        // reference so the callback can update the same object when it runs
+        //
+        // (std::string_view output) is the argument the parser supplies whenever
+        // it identifies a range of bytes as ordinary terminal output
+        [&captureCoordinator](std::string_view output) {
+            // Keep ordinary child-shell output visible in the real terminal
+            writeAll(
+                STDOUT_FILENO,  // Destination: the real terminal's standard output
+                output.data(),  // First byte of the ordinary output range
+                output.size()   // Number of ordinary output bytes to write
+            );
+
+            // Associate the same output with the command currently being captured
+            captureCoordinator.appendOutput(output);
+        };
+
+    // EventHandler is an alias for std::function<void(const ControlEvent&)>.
+    // It stores a callable that receives one decoded control event from the parser
+    ControlProtocolParser::EventHandler eventHandler =
+        // Capture this PtyCaptureBacked object so the lambda can call
+        // handleControlEvent(), and capture the existing coordinator by reference
+        // so the same capture state is updated
+        [this, &captureCoordinator](const ControlEvent& event) {
+            // Forward the decoded event to the helper that determines whether it
+            // represents a command start or command finish
+            handleControlEvent(event, captureCoordinator);
+        };
+
+    // Create the parser that will inspect PTY output for this session.
+    // The nonce identifies legitimate control frames, while the two handlers
+    // define what happens to ordinary output and decoded control events
+    ControlProtocolParser parser(
+        sessionNonce,   // Control frames must contain this session's nonce
+        outputHandler,  // Receives ordinary terminal output
+        eventHandler    // Revceives decoded command lifecycle events
+    );
 
     // Reaching this point means we are in the parent process
     //
@@ -609,7 +720,10 @@ void PtyCaptureBackend::runSession() {
         if(descriptors[1].revents & POLLIN) {
             // Shell/program output is ready to be read from the PTY master
             // Forward available child-PTY output to the real terminal
-            if(!forwardPtyOutput(masterDescriptor.get())) {
+            if(!forwardPtyOutput(
+                masterDescriptor.get(), // PTY master to read child-shell output from
+                parser                  // Separates output from control frames
+            )) {
                 masterDescriptor.closeNow();
                 sessionRunning = false;
                 continue;

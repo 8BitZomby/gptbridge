@@ -2,6 +2,8 @@
 #define GPTB_PTY_CAPTURE_BACKEND_HPP
 
 #include "CaptureBackend.hpp"
+#include "CaptureCoordinator.hpp"
+#include "ControlProtocolParser.hpp"
 
 #include <array>
 #include <poll.h>
@@ -39,9 +41,9 @@ class PtyCaptureBackend : public CaptureBackend {
         // Returns false when terminal input has reached EOF and the session should end
         bool forwardTerminalInput(int masterFd);
 
-        // Reads one available output chunk from the child PTY and forwards it to the
-        // real terminal. Returns false when the PTY output stream has ended
-        bool forwardPtyOutput(int masterFd);
+        // Reads one available output chunk from the child PTY and passes it through the
+        // control-protocol parser. Returns false when the PTY output stream has ended
+        bool forwardPtyOutput(int masterFd, ControlProtocolParser& parser);
 
         // Waits for the child shell to terminate and collects its process status
         void waitForChild(pid_t childPid);
@@ -62,6 +64,9 @@ class PtyCaptureBackend : public CaptureBackend {
 
         // Checks descriptor conditions and determines whether the session should continue
         DescriptorCondition checkDescriptorConditions(const std::array<pollfd, 2>& descriptors) const;
+
+        // Dispatches a decoded control event to the appropriate capture-coordinator operation
+        void handleControlEvent(const ControlEvent& event, CaptureCoordinator& captureCoordinator);
 };
 
 
