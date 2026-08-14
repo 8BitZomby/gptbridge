@@ -39,6 +39,7 @@ add_executable(gptb
     src/Config.cpp
     src/CommandLine.cpp
     src/ControlFrameEncoder.cpp
+    src/ControlPipe.cpp
     src/ControlProtocolParser.cpp
     src/ExecutablePath.cpp
     src/InteractionHistory.cpp
