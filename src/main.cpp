@@ -4,6 +4,7 @@
 #include "ProjectManager.hpp"
 #include "PtyCaptureBackend.hpp"
 #include "SessionManager.hpp"
+#include "ShellIntegration.hpp"
 #include "Storage.hpp"
 
 #include <exception>
@@ -123,21 +124,6 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
-            case Command::Remove: {
-                // "gptb remove project <name>" removes one saved project entry
-                if(argc != 4 || std::string(argv[2]) != "project") {
-                    std::cout << "Usage: gptb remove project <name>\n";
-                    return 1;
-                }
-                // removeProject() reports whether the requested project existed
-                if(!removeProject(argv[3])) {
-                    std::cout << "Project not found: " << argv[3] << '\n';
-                    return 1;
-                }
-                std::cout << "Removed project: " << argv[3] << '\n';
-                return 0;
-            }
-
             case Command::Session: {
                 // "gptb session <mode>" changes how active-project state is shared
                 if(argc != 3) {
@@ -155,6 +141,18 @@ int main(int argc, char* argv[]) {
                 }
 
                 std::cout << "Session mode: " << sessionModeToString(getSessionMode()) << '\n';
+                return 0;
+            }
+
+            case Command::ShellInit: {
+                // "gptb shell-init <shell>" prints initialization code for the requested shell
+                if(argc != 3) {
+                    std::cout << "Usage: gptb shell-init <shell>";
+                    return 1;
+                }
+                // Generate the shell-specific initialization script and write it to stdout
+                // This allows usage such as: eval "$(gptb shell-init zsh)"
+                std::cout << generateShellInit(argv[2]);
                 return 0;
             }
 

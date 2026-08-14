@@ -7,6 +7,7 @@
 
 #include <array>
 #include <poll.h>
+#include <string>
 #include <sys/ioctl.h>
 #include <sys/types.h>
 
@@ -35,7 +36,7 @@ class PtyCaptureBackend : public CaptureBackend {
         void updatePtyWindowSize(int masterF);
 
         // Replaces the child process with the configured interactive shell
-        [[noreturn]] void runChildShell();
+        [[noreturn]] void runChildShell(const std::string& sessionNonce);
 
         // Reads available input from the real terminal and forwards it to the child PTY.
         // Returns false when terminal input has reached EOF and the session should end

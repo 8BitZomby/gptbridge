@@ -13,6 +13,8 @@ Command parseCommand(const std::string& command) {
     if(command == "push") { return Command::Push; }
     if(command == "remove") { return Command::Remove; }
     if(command == "session") { return Command::Session; }
+    if(command == "shell-init") { return Command::ShellInit; }
+    if(command == "shell-event") { return Command::ShellEvent; }
     if(command == "show") { return Command::Show; }
     if(command == "status") { return Command::Status; }
     if(command == "use") { return Command::Use; }

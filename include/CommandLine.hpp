@@ -12,6 +12,8 @@ enum class Command {
     Push,
     Remove,
     Session,
+    ShellInit,
+    ShellEvent,
     Show,
     Status,
     Use,

@@ -235,10 +235,17 @@ void PtyCaptureBackend::updatePtyWindowSize(int masterFd) {
  *   - if execl() succeeds, the process image is replaced
  *   - if setup or execl() fails, we call _exit()
  */
-[[noreturn]] void PtyCaptureBackend::runChildShell() {
+[[noreturn]] void PtyCaptureBackend::runChildShell(const std::string& sessionNonce) {
     // SHELL normall contains the path to the user's configured shell,
     // for example "/bin/zsh" on macOS
     const char* shell = std::getenv("SHELL");
+
+    // Make this capture session's nonce available to the child shell so shell-
+    // side hooks can include it in every gptbridge control frame they emit
+    // Pass c-style string. The 1 means overwrite any existing string
+    if(setenv("GPTB_SESSION_NONCE", sessionNonce.c_str(), 1) == -1) {
+        _exit(1);
+    }
 
     // Without a shell path, the child cannot start an interactive shell
     if(shell == nullptr) {
@@ -602,7 +609,7 @@ void PtyCaptureBackend::runSession() {
 
     // A return value of 0 means this is the created child process
     if(childPid == 0) {
-        runChildShell();
+        runChildShell(sessionNonce);
     }
 
     // The parent owns the PTY master descriptor from this point onward.
