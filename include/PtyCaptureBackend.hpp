@@ -47,6 +47,10 @@ class PtyCaptureBackend : public CaptureBackend {
         // Returns false when terminal input has reached EOF and the session should end
         bool forwardTerminalInput(int masterFd);
 
+        // Reads one available chunk from the private control pipe and passes it to the
+        // control-protocol parser. Returns false when the control pipe reaches EOF.
+        bool forwardControlInput(int controlReadFd, ControlProtocolParser& parser);
+
         // Reads one available output chunk from the child PTY and passes it through the
         // control-protocol parser. Returns false when the PTY output stream has ended
         bool forwardPtyOutput(int masterFd, ControlProtocolParser& parser);

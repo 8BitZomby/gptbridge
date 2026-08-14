@@ -331,6 +331,54 @@ bool PtyCaptureBackend::forwardTerminalInput(int masterFd) {
 
 
 /**
+ * forwardControlInput()
+ * Reads one available chunk from the private gptbridge control pipe and passes
+ * those bytes to the control-protocol parser. Returns false when the control
+ * pipe reaches EOF.
+ */
+bool PtyCaptureBackend::forwardControlInput(int controlReadFd, ControlProtocolParser& parser) {
+    // Temporary buffer used to receive private control-protocol bytes
+    char buffer[4096];
+
+    // Read whatever control data is currently available from the pipe
+    const ssize_t bytesRead = read(
+            controlReadFd,      // Source: parent-owned read end of the control pipe
+            buffer,             // Destination bufer for receive control bytes
+            sizeof(buffer)      // Max number of bytes to read
+    );
+
+    // A negative result means the read operation failed
+    if(bytesRead == -1) {
+        // EINTR means a signal interrupted the read, so the session can continue
+        if(errno == EINTR) {
+            return true;
+        }
+
+        // Any other error means the private control channel can no longer
+        // be read reliably
+        throw std::runtime_error("Failed to read control pipe");
+    }
+
+    // Zero means every writer for the pipe has been closed and no additional
+    // control events can arrive
+    if(bytesRead == 0) {
+        return false;
+    }
+
+    // Feed exactly the bytes received from the private control channel into
+    // the parser. The parser handles frames that may span multiple reads
+    parser.consume(
+        std::string_view(
+            buffer,                             // First received control byte
+            static_cast<std::size_t>(bytesRead) // Number of valid bytes in buffer
+        )
+    );
+
+    return true;
+}
+
+
+/**
  * forwardPtyOutput()
  * Reads one available chunk from the child PTY and passes those bytes through
  * the control-protocol parser. Returns false when the PTY output stream ends.
@@ -790,6 +838,22 @@ void PtyCaptureBackend::runSession() {
                 masterDescriptor.closeNow();
                 sessionRunning = false;
                 continue;
+            }
+        }
+
+        // Check the control pipe for private gptbridge lifecycle events
+        if(descriptors[2].revents & POLLIN) {
+            // Control protocol bytes are ready to be read from the parent-owned
+            // read end of the private control pipe
+            if(!forwardControlInput(
+                controlPipe.getReadFd(),
+                parser
+                )
+            ) {
+                // EOF on the control pipe means no additional control events can arrive.
+                // Do not end the PTY session here. Control channel shutdown semantics
+                // are handled separately from terminal-session shutdown
+                // TEMPORARILY EMPTY
             }
         }
 
