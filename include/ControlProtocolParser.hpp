@@ -43,6 +43,15 @@ class ControlProtocolParser {
          */
         void consume(std::string_view bytes);
 
+        /**
+         * consumeControl()
+         * Processes bytes received from the dedicated control channel. Unlike consume(),
+         * this input is expected to contain only gptbridge control frames. Incomplete
+         * frames are retained internally until later control-pipe reads provide the
+         * remaining bytes.
+         */
+        void consumeControl(std::string_view bytes);
+
     private:
         // Nonce/session token required for control frames in this capture
         std::string sessionNonce;

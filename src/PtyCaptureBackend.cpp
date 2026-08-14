@@ -365,11 +365,11 @@ bool PtyCaptureBackend::forwardControlInput(int controlReadFd, ControlProtocolPa
         return false;
     }
 
-    // Feed exactly the bytes received from the private control channel into
-    // the parser. The parser handles frames that may span multiple reads
-    parser.consume(
+    // Pass the bytes from the private control channel to the parser's dedicated
+    // control-stream entry point
+    parser.consumeControl(
         std::string_view(
-            buffer,                             // First received control byte
+            buffer,                             // Bytes just read from the private control pipe
             static_cast<std::size_t>(bytesRead) // Number of valid bytes in buffer
         )
     );

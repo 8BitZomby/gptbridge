@@ -213,6 +213,44 @@ void ControlProtocolParser::consume(std::string_view bytes) {
     }
 }
 
+
+/**
+ * consumeControl()
+ * Processes bytes arriving through the dedicated control pipe. Because this
+ * channel carries only gptbridge protocol data, parsin always begins at the
+ * start of pendingBytes rather than searching through ordinary terminal output
+ */
+void ControlProtocolParser::consumeControl(std::string_view bytes) {
+    // Pipe reads can split a control frame at any byte boundary. Append the new
+    // bytes to any incomplete frame retained from the previous read
+    pendingBytes.append(bytes);
+
+    // Continue while complete control frames can be removed from the buffer.
+    // An incomplete frame remains buffered until another pipe read supplies
+    // the bytes required to finish it
+    while(!pendingBytes.empty()) {
+        const FrameParseResult frameResult = tryParseFrame();
+
+        // A complete frame was decoded and remove from pendingBytes. Continue
+        // because another complete frame may already follow it in this read
+        if(frameResult == FrameParseResult::Consumed) {
+            continue;
+        }
+
+        // The beginning of a possible frame is present, but the complete frame
+        // has not arrived yet. Preserve it for the next control-pip read
+        if(frameResult == FrameParseResult::Incomplete) {
+            break;
+        }
+
+        // The dedicated channel must not contain ordinary terminal data. If
+        // bytes fail control-frame validation, continuing would make the stream
+        // boundary ambiguous and could silently discard ptotocol corruption
+        throw std::runtime_error("Invalid data received on control channel");
+    }
+}
+
+
 /**
  * tryParseFrame()
  * Examines a control-frame candidate beginning at the start of pendingBytes.
