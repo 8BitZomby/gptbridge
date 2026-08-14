@@ -1,5 +1,6 @@
 #include "PtyCaptureBackend.hpp"
 #include "CaptureCoordinator.hpp"
+#include "ControlPipe.hpp"
 #include "ControlProtocolParser.hpp"
 #include "ExecutablePath.hpp"
 #include "SessionNonce.hpp"
@@ -598,6 +599,11 @@ void PtyCaptureBackend::runSession() {
     // on PATH lookup
     const std::filesystem::path executablePath = getExecutablePath();
 
+    // Create the private one-way control channel before forkpty(). Both resulting
+    // processes initially inherit both descriptors; immediately after the fork,
+    // each process will close the end it does not own
+    ControlPipe controlPipe;
+
     // forkpty() performs both PTY creation and process creation
     //
     // After this call:
@@ -621,8 +627,19 @@ void PtyCaptureBackend::runSession() {
 
     // A return value of 0 means this is the created child process
     if(childPid == 0) {
+        // The child only sends control events, so it must not retain the read end.
+        // Keeping unnecessary copies of pipe ends open can interfere with EOF
+        // detection and makes descriptor ownership harder to reason about
+        controlPipe.closeReadEnd();
+
+        // Replace the forked child process with the configured interactive shell.
+        // This call does not return if shell startup succeeds.
         runChildShell(sessionNonce, executablePath);
     }
+
+    // Only the parent reaches this point because runChildShell() never returns in
+    // the child. The parent only receives control events, so release its write end.
+    controlPipe.closeWriteEnd();
 
     // The parent owns the PTY master descriptor from this point onward.
     // The guard closes it automatically on every return or exception path
