@@ -37,7 +37,11 @@ class PtyCaptureBackend : public CaptureBackend {
         void updatePtyWindowSize(int masterF);
 
         // Replaces the child process with the configured interactive shell
-        [[noreturn]] void runChildShell(const std::string& sessionNonce, const std::filesystem::path& executablePath);
+        [[noreturn]] void runChildShell(
+                const std::string& sessionNonce,
+                const std::filesystem::path& executablePath,
+                int controlWriteFd
+        );
 
         // Reads available input from the real terminal and forwards it to the child PTY.
         // Returns false when terminal input has reached EOF and the session should end

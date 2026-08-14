@@ -236,7 +236,11 @@ void PtyCaptureBackend::updatePtyWindowSize(int masterFd) {
  *   - if execl() succeeds, the process image is replaced
  *   - if setup or execl() fails, we call _exit()
  */
-[[noreturn]] void PtyCaptureBackend::runChildShell(const std::string& sessionNonce, const std::filesystem::path& executablePath) {
+[[noreturn]] void PtyCaptureBackend::runChildShell(
+        const std::string& sessionNonce,
+        const std::filesystem::path& executablePath,
+        int controlWriteFd
+    ) {
     // SHELL normall contains the path to the user's configured shell,
     // for example "/bin/zsh" on macOS
     const char* shell = std::getenv("SHELL");
@@ -252,6 +256,15 @@ void PtyCaptureBackend::updatePtyWindowSize(int masterFd) {
     // This avoids relying on PATH when hooks invoke the internal shell-event command.
     const std::string executablePathString = executablePath.string();
     if(setenv("GPTB_EXECUTABLE", executablePathString.c_str(), 1) == -1) {
+        _exit(1);
+    }
+
+    // Expose the inherited control-pipe write descriptor to the child shell.
+    // Shell-side lifecycle hooks will use this descriptor to send private control
+    // events directly to the parent instead of mixing them with terminal output.
+    const std::string controlWriteFdString = std::to_string(controlWriteFd);
+
+    if(setenv("GPTB_CONTROL_FD", controlWriteFdString.c_str(), 1) == -1) {
         _exit(1);
     }
 
@@ -634,7 +647,7 @@ void PtyCaptureBackend::runSession() {
 
         // Replace the forked child process with the configured interactive shell.
         // This call does not return if shell startup succeeds.
-        runChildShell(sessionNonce, executablePath);
+        runChildShell(sessionNonce, executablePath, controlPipe.getWriteFd());
     }
 
     // Only the parent reaches this point because runChildShell() never returns in
