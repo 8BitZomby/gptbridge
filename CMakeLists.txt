@@ -18,12 +18,29 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Read the zsh integration script at configure time so it can be embedded
+# directly into the gptb executable without requiring the source file at runtime.
+file(
+    READ
+    "${CMAKE_CURRENT_SOURCE_DIR}/shell/gptbridge.zsh"
+    GPTB_ZSH_INTEGRATION
+)
+
+# Generate a C++ header containing the script as a raw string literal.
+# @ONLY ensures only @VARIABLE@ placeholders are substituted by CMake.
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbeddedZshIntegration.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/EmbeddedZshIntegration.hpp"
+    @ONLY
+)
+
 add_executable(gptb
     src/CaptureCoordinator.cpp
     src/Config.cpp
     src/CommandLine.cpp
     src/ControlFrameEncoder.cpp
     src/ControlProtocolParser.cpp
+    src/ExecutablePath.cpp
     src/InteractionHistory.cpp
     src/main.cpp
     src/ProjectManager.cpp
@@ -32,9 +49,14 @@ add_executable(gptb
     src/ShellIntegration.cpp
     src/SessionManager.cpp
     src/SessionNonce.cpp
+    src/TimeUtils.cpp
 )
 
-target_include_directories(gptb PRIVATE include)
+target_include_directories(gptb PRIVATE
+    include
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+)
+
 target_link_libraries(gptb PRIVATE
     nlohmann_json::nlohmann_json
     "-framework Security"

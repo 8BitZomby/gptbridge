@@ -1,0 +1,16 @@
+#ifndef GPTB_EMBEDDED_ZSH_INTEGRATION_HPP
+#define GPTB_EMBEDDED_ZSH_INTEGRATION_HPP
+
+#include <string_view>
+
+
+namespace EmbeddedShellIntegration {
+
+    // Complete zsh integration script embedded into the gptb executable at
+    // build time. shell/gptbridge.zsh remains the source of truth; CMake
+    // generates this header from that file when the project is configured.
+    inline constexpr std::string_view zshScript = R"GPTB_ZSH(@GPTB_ZSH_INTEGRATION@)GPTB_ZSH";
+}
+
+
+#endif

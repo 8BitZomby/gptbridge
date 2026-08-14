@@ -1,12 +1,15 @@
 #include "CommandLine.hpp"
 #include "Config.hpp"
+#include "ControlFrameEncoder.hpp"
 #include "InteractionHistory.hpp"
 #include "ProjectManager.hpp"
 #include "PtyCaptureBackend.hpp"
 #include "SessionManager.hpp"
 #include "ShellIntegration.hpp"
 #include "Storage.hpp"
+#include "TimeUtils.hpp"
 
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -61,8 +64,7 @@ int main(int argc, char* argv[]) {
                 return 0;
             }
 
-
-            // ---- TEST FEATURE ONLY ---- //
+// ---- TEST FEATURE ONLY ---- //
             case Command::Capture: {
                 // "gptb capture" launches an interactive shell through the PTY backend
                 if(argc != 2) {
@@ -73,8 +75,6 @@ int main(int argc, char* argv[]) {
                 backend.run();
                 return 0;
             }
-
-
 
             case Command::List: {
                 // "gptb list <type>" currently supports projects and saved sessions
@@ -142,6 +142,106 @@ int main(int argc, char* argv[]) {
 
                 std::cout << "Session mode: " << sessionModeToString(getSessionMode()) << '\n';
                 return 0;
+            }
+
+            case Command::ShellEvent: {
+                // "gptb shell-event" is an internal command used by shell integration
+                // hooks to report command lifecycle metadata back to the capture process
+                if(argc < 3) {
+                    std::cerr << "Usage: gptb shell-event <started|finished> ...\n";
+                    return 1;
+                }
+
+                const std::string eventType = argv[2];
+
+                if(eventType == "started") {
+                    // started requires:
+                    //   interaction ID, command text, and working directory
+                    if(argc != 6) {
+                        std::cerr << "Usage: gptb shell-event started "
+                                << "<interaction-id> <command> <working-directory>\n";
+                        return 1;
+                    }
+                    // Build the strongly typed event that represents the command start
+                    CommandStartedEvent event{
+                        .interactionId = argv[3],
+                        .command = argv[4],
+                        .workingDirectory = argv[5],
+                        .startedAt = currentTimestampUtc()
+                    };
+                    // The child shell receives this nonce from PtyCaptureBackend
+                    // shell-event must include the same nonce so the parent parser accepts the frame
+                    const char* sessionNonce = std::getenv("GPTB_SESSION_NONCE");
+                    if(sessionNonce == nullptr || *sessionNonce == '\0') {
+                        std::cerr << "gptb: GPTB_SESSION_NONCE is not set\n";
+                        return 1;
+                    }
+
+                    // Convert the structured event into the complete framed byte sequence expected
+                    // by ControlProtocolParser
+                    const std::string frame = ControlFrameEncoder::encode(event, sessionNonce);
+
+                    // shell-event writes only the private control frame. Because this command runs
+                    // inside the captured shell, stdout travels through the PTY back to the parent,
+                    // where ControlProtocolParser removes the frame from visible terminal output.
+                    std::cout << frame;
+                    std::cout.flush();
+
+                    return 0;
+                }
+                if(eventType == "finished") {
+                    // finished requires:
+                    //   interaction ID and exit code
+                    if(argc != 5) {
+                        std::cerr << "Usage: gptb shell-event finished "
+                                << "<interaction-id> <exit-code>\n";
+                        return 1;
+                    }
+
+                    // Convert the exit-code argument from text into an integer
+                    int exitCode = 0;
+                    try {
+                        // std::stoi() reports the index immediately after the parsed integer.
+                        // Requiring that index to reach the end rejects values such as "12junk".
+                        std::size_t parsedLength = 0;
+                        const std::string exitCodeText = argv[4];
+                        exitCode = std::stoi(exitCodeText, &parsedLength);
+                        if(parsedLength != exitCodeText.size()) {
+                            std::cerr << "gptb: invalid shell-event exit code\n";
+                            return 1;
+                        }
+                    }
+                    catch(const std::exception&) {
+                        std::cerr << "gptb: invalid shell-event exit code\n";
+                        return 1;
+                    }
+
+                    // Build the strongly typed event representing command completion
+                    CommandFinishedEvent event{
+                        .interactionId = argv[3],
+                        .exitCode = exitCode,
+                        .finishedAt = currentTimestampUtc()
+                    };
+
+                    // The frame must carry the same nonce that PtyCaptureBackend supplied
+                    // to the captured child shell
+                    const char* sessionNonce = std::getenv("GPTB_SESSION_NONCE");
+                    if(sessionNonce == nullptr || *sessionNonce == '\0') {
+                        std::cerr << "gptb: GPTB_SESSION_NONCE is not set\n";
+                        return 1;
+                    }
+
+                    // Serialize the finished event and wrap it in the control-protocol framing
+                    const std::string frame = ControlFrameEncoder::encode(event, sessionNonce);
+
+                    // stdout travels through the PTY to the parent ControlProtocolParser
+                    std::cout << frame;
+                    std::cout.flush();
+
+                    return 0;
+                }
+                std::cerr << "Unknown shell event type: " << eventType << '\n';
+                return 1;
             }
 
             case Command::ShellInit: {

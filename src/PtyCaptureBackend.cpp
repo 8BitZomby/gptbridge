@@ -1,7 +1,7 @@
 #include "PtyCaptureBackend.hpp"
-
 #include "CaptureCoordinator.hpp"
 #include "ControlProtocolParser.hpp"
+#include "ExecutablePath.hpp"
 #include "SessionNonce.hpp"
 
 #include <cerrno>
@@ -235,7 +235,7 @@ void PtyCaptureBackend::updatePtyWindowSize(int masterFd) {
  *   - if execl() succeeds, the process image is replaced
  *   - if setup or execl() fails, we call _exit()
  */
-[[noreturn]] void PtyCaptureBackend::runChildShell(const std::string& sessionNonce) {
+[[noreturn]] void PtyCaptureBackend::runChildShell(const std::string& sessionNonce, const std::filesystem::path& executablePath) {
     // SHELL normall contains the path to the user's configured shell,
     // for example "/bin/zsh" on macOS
     const char* shell = std::getenv("SHELL");
@@ -244,6 +244,13 @@ void PtyCaptureBackend::updatePtyWindowSize(int masterFd) {
     // side hooks can include it in every gptbridge control frame they emit
     // Pass c-style string. The 1 means overwrite any existing string
     if(setenv("GPTB_SESSION_NONCE", sessionNonce.c_str(), 1) == -1) {
+        _exit(1);
+    }
+
+    // Give shell hooks the exact executable that launched this capture session.
+    // This avoids relying on PATH when hooks invoke the internal shell-event command.
+    const std::string executablePathString = executablePath.string();
+    if(setenv("GPTB_EXECUTABLE", executablePathString.c_str(), 1) == -1) {
         _exit(1);
     }
 
@@ -586,6 +593,11 @@ void PtyCaptureBackend::runSession() {
     // control frames from ordinary terminal output
     const std::string sessionNonce = generateSessionNonce();
 
+    // Resolve the exact gptb executable before forkpty() so the child shell can
+    // invoke the same binary for internal shell-event reporting without replying
+    // on PATH lookup
+    const std::filesystem::path executablePath = getExecutablePath();
+
     // forkpty() performs both PTY creation and process creation
     //
     // After this call:
@@ -609,7 +621,7 @@ void PtyCaptureBackend::runSession() {
 
     // A return value of 0 means this is the created child process
     if(childPid == 0) {
-        runChildShell(sessionNonce);
+        runChildShell(sessionNonce, executablePath);
     }
 
     // The parent owns the PTY master descriptor from this point onward.
