@@ -34,7 +34,7 @@ class PtyCaptureBackend : public CaptureBackend {
         winsize getTerminalSize() const;
 
         // Applies the real terminal's current dimensions to the child PTY
-        void updatePtyWindowSize(int masterF);
+        void updatePtyWindowSize(int masterFd);
 
         // Replaces the child process with the configured interactive shell
         [[noreturn]] void runChildShell(
@@ -54,12 +54,13 @@ class PtyCaptureBackend : public CaptureBackend {
         // Waits for the child shell to terminate and collects its process status
         void waitForChild(pid_t childPid);
 
-        // Creates the poll descriptor set for real-terminal input and child-PTY output
-        std::array<pollfd, 2> createPollDescriptors(int masterFd) const;
+        // Creates the poll descriptor set for real-terminal input, child-PTY output,
+        // and provate control events arriving from the child through the control pipe
+        std::array<pollfd, 3> createPollDescriptors(int masterFd, int controlReadFd) const;
 
         // Waits until one of the monitored descriptors reports an event. Returns false
         // only when poll() was interrupted by a signal and should be retried
-        bool waitForPollEvents(std::array<pollfd, 2>& descriptors) const;
+        bool waitForPollEvents(std::array<pollfd, 3>& descriptors) const;
 
         // Describes whether poll-reported descriptor conditions allow the session
         // to continue or recquire the forwarding loop to end
@@ -69,7 +70,7 @@ class PtyCaptureBackend : public CaptureBackend {
         };
 
         // Checks descriptor conditions and determines whether the session should continue
-        DescriptorCondition checkDescriptorConditions(const std::array<pollfd, 2>& descriptors) const;
+        DescriptorCondition checkDescriptorConditions(const std::array<pollfd, 3>& descriptors) const;
 
         // Dispatches a decoded control event to the appropriate capture-coordinator operation
         void handleControlEvent(const ControlEvent& event, CaptureCoordinator& captureCoordinator);

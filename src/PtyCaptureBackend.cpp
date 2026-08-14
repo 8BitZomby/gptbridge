@@ -412,11 +412,15 @@ void PtyCaptureBackend::waitForChild(pid_t childPid) {
 /**
  * createPollDescriptors()
  * Builds the two descriptors monitored during the forwarding loop:
- * real-terminal input and output arriving from the child PTY
+ * real-terminal input, child-PTY output, and private control-pipe input.
  */
-std::array<pollfd, 2> PtyCaptureBackend::createPollDescriptors(int masterFd) const {
+std::array<pollfd, 3> PtyCaptureBackend::createPollDescriptors(int masterFd, int controlReadFd) const {
 
-    std::array<pollfd, 2> descriptors{};
+    // The forwarding loop monitor three independent input sources:
+    //   descriptors[0] -> STDIN_FILENO: real terminal keyboard/input
+    //   descriptors[1] -> masterFd: child shell/program terminal output
+    //   descriptors[2] -> controlReadFd: private gptbridge lifecycle events
+    std::array<pollfd, 3> descriptors{};
 
     // Descriptor 0 watches keyboard/input arriving from the real terminal
     descriptors[0].fd = STDIN_FILENO;
@@ -428,6 +432,12 @@ std::array<pollfd, 2> PtyCaptureBackend::createPollDescriptors(int masterFd) con
     descriptors[1].events = POLLIN;
     descriptors[1].revents = 0;
 
+    // Descriptor 2 watches private lifecycle events arriving from the child shell
+    // through the parent-owned read end of the control pipe
+    descriptors[2].fd = controlReadFd;
+    descriptors[2].events = POLLIN;
+    descriptors[2].revents = 0;
+
     return descriptors;
 }
 
@@ -437,16 +447,16 @@ std::array<pollfd, 2> PtyCaptureBackend::createPollDescriptors(int masterFd) con
  * Blocks until poll() reports activity on one or more monitored descriptors.
  *
  * poll() waits on every descriptor in the supplied array and returns:
- *   -1  ->  error
- *    1  ->  one monitored descriptor has an event
- *    2  ->  both monitored descriptors have events
+ *   -1  ->  an error occurred
+ *    0  ->  timeout expisred (not expected here because the timeout is infinite)
+ *   >0  ->  number of descriptors whose revents field contains an event
  *
  *  When poll() suceeds, each descriptor's revents field identifies which
  *  events occured. If poll() is interrupted by a signal (EINTR), this helper
  *  returns false so the caller can safely retry the forwarding loop
  */
-bool PtyCaptureBackend::waitForPollEvents(std::array<pollfd, 2>& descriptors) const {
-    // Wait indefinitely for activity on either terminal input or PTY output
+bool PtyCaptureBackend::waitForPollEvents(std::array<pollfd, 3>& descriptors) const {
+    // Wait indefinitely for activity on terminal input, PTY output or control event
     const int pollResult = poll(
             descriptors.data(), // Pointer to first pollfd entry
             descriptors.size(), // Number of descriptors being monitored
@@ -472,11 +482,14 @@ bool PtyCaptureBackend::waitForPollEvents(std::array<pollfd, 2>& descriptors) co
 
 /**
  * checkDescriptorConditions()
- * Examines descriptor conditions reported by poll(). Invalid descriptors and
- * I/O errors are treated as failures, while normal hangups signal that the
- * forwarding session should end
+ * Examines descriptor conditions reported by poll() for the real terminal,
+ * PTY master, and control pipe. Invalid descriptors and I/O errors are treated
+ * as failures, while normal terminal/PTY hangups can end the forwarding session.
+ *
+ * Control-pipe hangup semantics are handled separately because control-channel
+ * EOF does not necessarily mean the PTY session itself should immediately end.
  */
-PtyCaptureBackend::DescriptorCondition PtyCaptureBackend::checkDescriptorConditions(const std::array<pollfd, 2>& descriptors) const {
+PtyCaptureBackend::DescriptorCondition PtyCaptureBackend::checkDescriptorConditions(const std::array<pollfd, 3>& descriptors) const {
 
     // -- Invalid Descriptor Checks -- //
     // POLLNVAL means the real-terminal input descriptor itself is invalid
@@ -718,14 +731,15 @@ void PtyCaptureBackend::runSession() {
 
     // poll() will monitor two input sources for the parent:
     //
-    //   1. STDIN_FILENO -> keyboard/input arriving from the real terminal
-    //   2. masterFd     -> output produced by the shell through the PTY
+    //   [0] STDIN_FILENO -> keyboard/input arriving from the real terminal
+    //   [1] masterFd     -> output produced by the shell through the PTY
+    //   [2] controlReadFd -> private gptbridge lifecycle events
     //
     // pollfd stores both the file descriptor to watch and the kinds of
     // events the parent is interested in receiving from that descriptor
 
     // Prepare the real-terminal and PTY descriptors monitored by poll()
-    std::array<pollfd, 2> descriptors = createPollDescriptors(masterDescriptor.get());
+    std::array<pollfd, 3> descriptors = createPollDescriptors(masterDescriptor.get(), controlPipe.getReadFd());
 
     // Keep gptb's SIGWINCH handler installed for the lifetime of the PTY
     // session. The guard restores the process's previous signal action
