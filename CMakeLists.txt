@@ -47,6 +47,7 @@ add_executable(gptb
     src/PtyCaptureBackend.cpp
     src/Storage.cpp
     src/ShellIntegration.cpp
+    src/ShellIntegrationEncoder.cpp
     src/SessionManager.cpp
     src/SessionNonce.cpp
     src/TimeUtils.cpp
