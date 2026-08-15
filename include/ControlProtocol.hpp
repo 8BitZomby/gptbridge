@@ -48,14 +48,63 @@ struct CommandFinishedEvent {
 
 
 /**
+ * WorkingDirectoryEvent
+ * Reports the current working directory decoded from a standard OSC 7
+ * shell-integration sequence
+ */
+struct WorkingDirectoryEvent {
+
+    // Filesystem directory reported by the shell before command execution
+    std::filesystem::path workingDirectory;
+};
+
+
+/**
+ * ExactCommandEvent
+ * Reports the exact command text supplied by the shell through gptbridge's
+ * private command-metadata OSC sequence
+ */
+struct ExactCommandEvent {
+
+    // Exact command text that the shell is about to execute
+    std::string command;
+};
+
+
+/**
+ * CommandOutputStartedEvent
+ * Represents the standard OSC 133;C boundary indicating that command
+ * execution has entered the command-output region
+ */
+struct CommandOutputStartedEvent {};
+
+
+/**
+ * CommandOutputFinishedEvent
+ * Represents the standard OSC 133;D boundary indicating that the active
+ * command has completed
+ */
+struct CommandOutputFinishedEvent {
+
+    // Exit status carried by the OSC 133;D completion sequence
+    int exitCode;
+};
+
+
+/**
  * ControlEvent
  * Represents one decoded shell lifecycle event received through gptbridge's
  * private control protocol. A control event is exactly one of the supported
  * event structures.
- * std::variant<A, B> means:
- *     Object contains either an A or B, but never both
+ * std::variant<A, B, C, D, E> means:
+ *     Object contains either an A, B, C, D, or E but never more than one
  */
-using ControlEvent = std::variant <CommandStartedEvent, CommandFinishedEvent>;
+using ControlEvent = std::variant <
+    CommandStartedEvent,
+    CommandFinishedEvent,
+    ExactCommandEvent,
+    CommandOutputStartedEvent,
+    CommandOutputFinishedEvent >;
 
 
 /**
