@@ -60,19 +60,63 @@ using ControlEvent = std::variant <CommandStartedEvent, CommandFinishedEvent>;
 
 /**
  * ControlProtocol
- * Defines the fixed framing values used to distinguish gptbridge control
- * messages from ordinary terminal output in the shared PTY byte stream.
- * When the parser sees framePrefix it will know that the following is
- * control protocol until frame terminator. Each control frame will also
- * include a per-session nonce/session token so only frames belonging to
- * the current capture session are accepted by the parser.
+ * Defines terminal control-sequence constants used by gptbridge to identify
+ * command lifecycle boundaries and metadata within the shared PTY byte stream.
+ *
+ * The new protocol uses standard OSC sequences where possible:
+ *   - OSC 7 for current working directory
+ *   - OSC133 for command lifeecycle boundaries
+ *
+ * Legacy gptbridge JSON framing remains temporarily while the parser and shell
+ * integration are migrated to the new protocol.
  */
 namespace ControlProtocol {
+
+    // ---- Standard Terminal OSC Sequences ---- //
+
+    // OSC (Operating System Command) sequences begin with ESC ] and are
+    // terminated with ST (String Terminator), represented by ESC \.
+    inline constexpr std::string_view oscIntroducer = "\x1b]";
+    inline constexpr std::string_view oscTerminator = "\x1b\\";
+
+    // OSC 7 reports the shell's current working directory as a file:// URL
+    inline constexpr std::string_view osc7Prefix = "\x1b]7;";
+
+    // OSC 133 provides semantic shell-integration boundaries within the same
+    // ordered PTY stream used for ordinary terminal input and output
+    inline constexpr std::string_view osc133Prefix = "\x1b]133;";
+
+    // OSC 133;C marks the transition from command metadata/input into the
+    // command-output region. gptbridge will treat this as the authoritative
+    // event that begins an active command interaction
+    inline constexpr std::string_view commandOutputStart = "\x1b]133;C\x1b\\";
+
+    // OSC 133;D marks command completion. The command's exit status is appended
+    // after "D;" before the OSC terminator, so this sequence is constructed
+    // dynamically rather than stored as one complete constant
+    inline constexpr std::string_view commandFinishedPrefix = "\x1b]133;D;";
+
+
+    // ---- Private gptbridge Command Metadata ---- //
+    // Private gptbridge OSC sequence carrying the exact command text reported
+    // by the shell. "E" identifies exect-command metadata. The encoded command
+    // and per-session nonce are appended before the OSC terminator.
+    //
+    // Format:
+    //   Esc ] GPTB ; E ; <escaped-command> ; <nonce> ESC \
+    //
+    // Command escaping follows the same general strategy used by VS Code's
+    // shell integration so protocol separators and control characters cannot
+    // be mistaken for framing bytes.
+    inline constexpr std::string_view exactCommandPrefix = "\x1b]GPTB;E;";
+
+
+    // ---- Legacy gptbridge Control Framing ---- //
 
     // Fixed byte sequences that mark the beginning and end of a gptbridge
     // control frame inside the shared PTY output stream
     inline constexpr std::string_view framePrefix = "\x1b]GPTB;";
-    inline constexpr std::string_view frameTerminator = "\x1b\\";
+    inline constexpr std::string_view frameTerminator = oscTerminator;
 
     // Separates variable-length fields inside the control-frame header
     inline constexpr char fieldSeparator = ';';
