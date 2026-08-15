@@ -5,6 +5,7 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -20,41 +21,21 @@ ControlProtocolParser::ControlProtocolParser(std::string sessionNonce, OutputHan
 
 
 /**
- * partialPrefixLength()
+ * partialOscIntroducerLength()
  * Returns the number of trailing bytes in pendingBytes that could be
- * the beginning of a control-frame prefix split actoss PTY reads
+ * the beginning of the OSC intriducer split across PTY reads
  */
-std::size_t ControlProtocolParser::partialPrefixLength() const {
-    // A partial match can never be as long as the complete frame prefix.
-    // If the entire prefix were present, consume() would already have found it
-    const std::size_t maxLength = std::min(
-            pendingBytes.size(),                        // Number of bytes currently waiting to be parsed
-            ControlProtocol::framePrefix.size() - 1);   // Longest possible match that is still incomplete
-
-    // Try the longest possible partial match first. As soon as one matches,
-    // it is the max number of trailing bytes that must be preserved
-    for(std::size_t length = maxLength; length > 0; --length) {
-
-        // Calculate where a suffix of this length begins inside pendingBytes
-        const std::size_t suffixStart = pendingBytes.size() - length;
-
-        // View the last 'length' bytes currently stored in pendingBytes
-        const std::string_view suffix(
-                pendingBytes.data() + suffixStart,      // Pointer to the first byte of the suffix
-                length);                                // Number of trailing bytes to examine
-
-        // View the first 'length' bytes of the known control-frame prefix
-        const std::string_view prefixStart(
-                ControlProtocol::framePrefix.data(),    // Pointer to the beginning of the frame prefix
-                length);                                // Compare the same number of bytes as the suffix
-
-        // If the buffered suffix matches the beginning of the frame prefix,
-        // these bytes may be the start of a frame continued by the next PTY read
-        if(suffix == prefixStart) {
-            return length;                              // Preserve this many trailing bytes
-        }
+std::size_t ControlProtocolParser::partialOscIntroducerLength() const {
+    // The OSC introducer is ESC ], so the only incomplete suffix worth
+    // preserving is a single trailing ESC byte
+    if(!pendingBytes.empty() && pendingBytes.back() == ControlProtocol::oscIntroducer.front()) {
+        // Preserve the trailing ESC because the next PTY read may begin with
+        // ']', completing the twp-byte OSC introducer
+        return 1;
     }
-    // No trailing bytes resemble the beginning of a control-frame prefix
+
+    // No trailing bytes could become the start of an OSC sequence, so nothing
+    // needs to be retained solely for introducer matching
     return 0;
 }
 
@@ -74,6 +55,438 @@ void ControlProtocolParser::emitOutput(std::string_view bytes) {
     // It only identifies that these bytes are not part of a control frame and
     // passes them to the component responsible for terminal/output handling.
     outputHandler(bytes);
+}
+
+
+/**
+ * tryParseOscSequence()
+ * Examines one OSC sequence beginning at the start of pendingBytes. Relevant
+ * shell-integration sequences are decoded into semantic events, while unrelated
+ * OSC sequences remain ordinary terminal data and are forwarded unchanged
+ */
+ControlProtocolParser::OscParseResult ControlProtocolParser::tryParseOscSequence() {
+    // This helper is called only after consume() has positioned an OSC
+    // introducer at index 0
+    if(!pendingBytes.starts_with(ControlProtocol::oscIntroducer)) {
+        throw std::runtime_error("OSC parser called without OSC introducer");
+    }
+
+    // Search for the ST terminator that closes this OSC sequence
+    const std::size_t terminatorPosition =
+        pendingBytes.find(
+            ControlProtocol::oscTerminator,
+            ControlProtocol::oscIntroducer.size()
+        );
+
+    // The OSC sequence may be split across arbitrary PTY reads. Preserve all
+    // currently buffered bytes until its terminator arrives
+    if(terminatorPosition == std::string::npos) {
+        return OscParseResult::Incomplete;
+    }
+
+    // Include the complete ST terminator in the sequence view and removal size
+    const std::size_t sequenceLength =
+        terminatorPosition + ControlProtocol::oscTerminator.size();
+
+    const std::string_view sequence(
+        pendingBytes.data(),    // First byte of the OSC introducer
+        sequenceLength          // Complete OSC sequence including its terminator
+    );
+
+    bool suppressSequence = false;
+
+    if(sequence.starts_with(ControlProtocol::osc7Prefix)) {
+        // OSC 7 is standard terminal metadata. Decode it for gptbridge while
+        // still forwarding the original sequence to the outer terminal
+        parserOsc7(sequence);
+    }
+    else if(sequence.starts_with(ControlProtocol::osc133Prefix)) {
+        // Only the OSC 133 lifecycle forms understood by gptbridge produce
+        // semantic events. Other OSC 133 forms remain valid terminal data
+        (void)parseOsc133(sequence);
+    }
+    else if(sequence.starts_with(ControlProtocol::exactCommandPrefix)) {
+        // Private GPTB command metadata is consumed only when its nonce belongs
+        // to this capture session. Foreign sequences are forwarded unchanged
+        suppressSequence = parseExactCommand(sequence);
+    }
+    else if(sequence.starts_with(ControlProtocol::framePrefix)) {
+        // The JSON-based GPTB frame parser remains available while that
+        // protocol is still accepted by the capture path
+        const FrameParseResult frameResult = tryParseFrame();
+
+        if(frameResult == FrameParseResult::Incomplete) {
+            return OscParseResult::Incomplete;
+        }
+        if(frameResult == FrameParseResult::Consumed) {
+            return OscParseResult::Consumed;
+        }
+
+        // A GPTB-looking sequence with another session nonce is ordinary
+        // terminal data and therefore falls through to forwarding below
+    }
+
+    if(!suppressSequence) {
+        emitOutput(sequence);
+    }
+
+    // Remove the complete OSC sequence after it has either been forwarded or
+    // privately consumed
+    pendingBytes.erase(
+        0,              // OSC sequence begins at the start of pendingBytes
+        sequenceLength  // Remove the complete sequence including ST
+    );
+
+    return OscParseResult::Consumed;
+}
+
+
+/**
+ * percentDecodePath()
+ * Reconstructs the filesystem-path bytes represented by an OSC 7 URI path.
+ * Each valid %HH escape is converted back into its original byte
+ */
+std::string ControlProtocolParser::percentDecodePath(std::string_view encodedPath) {
+    std::string decodedPath;
+    decodedPath.reserve(encodedPath.size());
+
+    // Convert one hexadecimal digit into its numeric value. Returning -1
+    // distinguishes an invalid hexadecimal character from the valid value zero
+    const auto hexValue = [](char character) -> int {
+        if(character >= '0' && character <= '9') {
+            return character - '0';
+        }
+        if(character >= 'A' && character <= 'F') {
+            return character - 'A' + 10;
+        }
+        if(character >= 'a' && character <= 'f') {
+            return character - 'a' + 10;
+        }
+        // The character is not a valid hexadecimal digit
+        return -1;
+    };
+
+    for(std::size_t idx = 0; idx < encodedPath.size(); ++idx) {
+        // Bytes other than '%' are not percent-encoded and can be copied
+        // directly into the reconstructed filesystem path
+        if(encodedPath[idx] != '%') {
+            decodedPath.push_back(encodedPath[idx]);
+            continue;
+        }
+
+        // A percent escape requires exactly two hex digits after '%'
+        if(idx + 2 >= encodedPath.size()) {
+            throw std::runtime_error("Incomplete percent encoding in OSC 7 path");
+        }
+
+        const int highNibble = hexValue(encodedPath[idx + 1]);
+        const int lowNibble = hexValue(encodedPath[idx + 2]);
+
+        // Both characters following '%' must be hex digits
+        if(highNibble < 0 || lowNibble < 0) {
+            throw std::runtime_error("Invalid percent encoding in OSC 7 path");
+        }
+
+        // Combine the two four-bit hex values into the original byte
+        const unsigned char decodedByte =
+            static_cast<unsigned char>((highNibble << 4) | lowNibble);
+
+        decodedPath.push_back(static_cast<char>(decodedByte));
+
+        // The loop increment handles the '%' byte, so advance by two ir more
+        // positions to skip the hex digits that were just decoded
+        idx += 2;
+    }
+
+    // Return the exact filesystem-path byte sequence reconstructed from the URI
+    return decodedPath;
+}
+
+
+/**
+ * parseOsc7()
+ * Decodes the working-directory file URI carried by a complete OSC 7 sequence
+ * and delivers the resulting filesystem path as a WorkingDirectoryEvent
+ */
+void ControlProtocolParser::parserOsc7(std::string_view sequence) {
+    // The caller classifies the sequence before dispatching it here, so an OSC 7
+    // sequence must begin with the standard OSC 7 prefix
+    if(!sequence.starts_with(ControlProtocol::osc7Prefix)) {
+        throw std::runtime_error("OSC 7 parser called with invalud prefix");
+    }
+
+    // A complete OSC sequence must end with the standard ST terminator
+    if(!sequence.ends_with(ControlProtocol::oscTerminator)) {
+        throw std::runtime_error("OSC 7 sequence missing terminator");
+    }
+
+    const std::size_t payloadStart = ControlProtocol::osc7Prefix.size();
+    const std::size_t payloadLength =
+        sequence.size() -
+        ControlProtocol::osc7Prefix.size() -
+        ControlProtocol::oscTerminator.size();
+
+    // View only the URI carried between "OSC7;" and the ST terminator
+    const std::string_view uri(
+            sequence.data() - payloadStart,
+            payloadLength
+    );
+
+    constexpr std::string_view fileScheme = "file://";
+
+    // OSC 7 working-directory metadata is represented as a file URI
+    if(!uri.starts_with(fileScheme)) {
+        throw std::runtime_error("OSC 7 payload is not a file URI");
+    }
+
+    // Skip "file://" and locate the slash that separates the URI authority
+    // (normally the hostname) from the filesystem path
+    const std::size_t authorityStart = fileScheme.size();
+    const std::size_t pathStart = uri.find('/', authorityStart);
+
+    if(pathStart == std::string_view::npos) {
+        throw std::runtime_error("OSC 7 file URI does not contain a path");
+    }
+
+    // The hostname identifies where the path resides. The current capture
+    // backend interprets OSC 7 only as working-directory metadata for the local
+    // shell, so the path itself is the value needed by the semantic event
+    const std::string_view encodedPath = uri.substr(pathStart);
+
+    const std::string decodedPath = percentDecodePath(encodedPath);
+
+    if(decodedPath.empty()) {
+        throw std::runtime_error("OSC 7 working directory is empty");
+    }
+
+    WorkingDirectoryEvent event{
+        .workingDirectory = std::filesystem::path(decodedPath)
+    };
+
+    // Deliver the decoded directory independently of terminal forwarding.
+    // tryParseOscSequence() is responsible for preserving the original standard
+    // OSC 7 sequence in the terminal byte stream
+    eventHandler(event);
+}
+
+
+/**
+ * unescapeCommand()
+ * Reconstructs the exact command text from the escaping used by the private
+ * GPTB command-metadata sequence
+ */
+std::string ControlProtocolParser::unescapeCommand(std::string_view encodedCommand) {
+    std::string command;
+    command.reserve(encodedCommand.size());
+
+    // Convert one hex digit into its numeric value. Returning -1 distinguishes
+    // an invalid hex character from the valid value zero
+    const auto hexValue = [](char character) -> int {
+        if(character >= '0' && character <= '9') {
+            return character - '0';
+        }
+        if(character >= 'A' && character <= 'F') {
+            return character - 'A' + 10;
+        }
+        if(character >= 'a' && character <= 'f') {
+            return character - 'a' + 10;
+        }
+        // The character is not a valid hexadecimal digit
+        return -1;
+    };
+
+    for(std::size_t idx = 0; idx < encodedCommand.size(); ++idx) {
+        // Ordinary bytes that are not escape introducers can be copied directly
+        if(encodedCommand[idx] != '\\') {
+            command.push_back(encodedCommand[idx]);
+            continue;
+        }
+
+        // Every escape sequence requires at least one byte after the backslash
+        if(idx + 1 >= encodedCommand.size()) {
+            throw std::runtime_error("Incomplete escape in exact-command metadata");
+        }
+
+        // Two consecutive backslashes represent one literal backslash
+        if(encodedCommand[idx + 1] == '\\') {
+            command.push_back('\\');
+            idx += 1;
+            continue;
+        }
+
+        // Hexadecimal escapes use the exact form \xHH
+        if(encodedCommand[idx + 1] != 'x') {
+            throw std::runtime_error("Invalid escape in exact-command metadata");
+        }
+
+        if(idx + 3 >= encodedCommand.size()) {
+            throw std::runtime_error("Incomplete hexadecimal escape in exact-command metadata");
+        }
+
+        const int highNibble = hexValue(encodedCommand[idx + 2]);
+        const int lowNibble = hexValue(encodedCommand[idx + 3]);
+
+        if(highNibble < 0 || lowNibble < 0) {
+            throw std::runtime_error("Invalid hexadecimal escape in exact-command");
+        }
+
+        // Reconstruct the original byte from the two hexadecimal nibbles
+        const unsigned char decodedByte = static_cast<unsigned char>((highNibble << 4) | lowNibble);
+        command.push_back(static_cast<char>(decodedByte));
+
+        // Skip the 'x'and both hexadecimal digits. The loop itself advances
+        // past the leading backslash
+        idx += 3;
+    }
+
+    // Return the exact shell command reconstructed from the encoded metadata
+    return command;
+}
+
+
+/**
+ * parseExactCommand()
+ * Decodes gptbridge's private exact-command OSC metadata and validates that
+ * the sequence belongs to the current capture session.
+ *
+ * Returns true when the private sequence was accepted and should be supressed
+ * from visible terminal output. A nonce mismatch returns false so unrelated
+ * GPTB-looking terminal data can pass through unchanged.
+ */
+bool ControlProtocolParser::parseExactCommand(std::string_view sequence) {
+    // The caller dispatches only sequences beginning with the private exact-
+    // command prefix, so receiving any other prefix here is a parser error
+    if(!sequence.starts_with(ControlProtocol::exactCommandPrefix)) {
+        throw std::runtime_error("Exact-command parser called with invalid prefix");
+    }
+    if(!sequence.ends_with(ControlProtocol::oscTerminator)) {
+        throw std::runtime_error("Exact-command sequence missing terminator");
+    }
+
+    const std::size_t payloadStart = ControlProtocol::exactCommandPrefix.size();
+    const std::size_t payloadLength =
+        sequence.size() -
+        ControlProtocol::exactCommandPrefix.size() -
+        ControlProtocol::oscTerminator.size();
+
+    // The private payload contains:
+    //   <escaped-command>;<session-nonce>
+    const std::string_view payload(
+            sequence.data() + payloadStart,
+            payloadLength
+    );
+
+    // The command encoder escapes every literal semicolon in command text, so
+    // the remaining literal separator marks the boundary before the nonce
+    const std::size_t separatorPosition = payload.rfind(ControlProtocol::fieldSeparator);
+
+    if(separatorPosition == std::string_view::npos) {
+        throw std::runtime_error("Exact-command metadata missing session nonce");
+    }
+
+    const std::string_view encodedCommand = payload.substr(0, separatorPosition);
+    const std::string_view candidateNonce = payload.substr(separatorPosition + 1);
+
+    // A nonce belonging to another capture means this sequence is not private
+    // metadata for the current parser instance
+    if(candidateNonce != sessionNonce) {
+        return false;
+    }
+
+    const std::string command = unescapeCommand(encodedCommand);
+
+    ExactCommandEvent event{
+        .command = command
+    };
+
+    // Deliver the decoded command metadata. tryParseOscSequence() suppresses the
+    // accepted private sequence from visible terminal output
+    eventHandler(event);
+
+    return true;
+}
+
+
+/**
+ * parseOsc133()
+ * Decodes supported OSC 133 command-lifecycle markers.
+ *
+ * Returns true when the sequence represents a lifecycle event understood by
+ * gptbridge. Other OSC 133 forms return false so they can remain ordinary
+ * terminal metadata and still be forwarded unchanged
+ */
+bool ControlProtocolParser::parseOsc133(std::string_view sequence) {
+    // The caller dispatches only OSC 133 sequences to this helper
+    if(!sequence.starts_with(ControlProtocol::osc133Prefix)) {
+        throw std::runtime_error("OSC 133 parser called with invalid prefix");
+    }
+
+    // Every complete OSc sequence must end with the ST terminator
+    if(!sequence.ends_with(ControlProtocol::oscTerminator)) {
+        throw std::runtime_error("OSC 133 sequence missing terminator");
+    }
+
+    // OSC 133;C is a complete fixed sequence marking the transition into the
+    // command-output region
+    if(sequence == ControlProtocol::commandOutputStart) {
+        eventHandler(CommandOutputStartedEvent{});
+
+        // The sequence was recognized and produce a semantic lifecycle event
+        return true;
+    }
+
+    // OSC 133;D;<status> begins with the fixed completion prefix
+    if(sequence.starts_with(ControlProtocol::commandFinishedPrefix)) {
+        const std::size_t statusStart = ControlProtocol::commandFinishedPrefix.size();
+
+        const std::size_t statusLength =
+            sequence.size() -
+            ControlProtocol::commandFinishedPrefix.size() -
+            ControlProtocol::oscTerminator.size();
+
+        // Extract only the decimal exit-status field between "D;" and ST
+        const std::string statusText = std::string(sequence.substr(statusStart, statusLength));
+
+        if(statusText.empty()) {
+            throw std::runtime_error("OSC 133 command-finished marker missing exit status");
+        }
+
+        int exitCode = 0;
+
+        try {
+            // Require the entire field to be a valid decimal integer rather
+            // than accepting a numeric prefix followed by invalid characters
+            std::size_t parsedLength = 0;
+
+            exitCode = std::stoi(
+                statusText,     // Decimal exit status from OSC 133;D
+                &parsedLength   // Receives the number of character passed
+            );
+
+            if(parsedLength != statusText.size()) {
+                throw std::runtime_error("Invalid OSC 133 exit status");
+            }
+        }
+        catch(const std::invalid_argument&) {
+            throw std::runtime_error("Invalid OSC 133 exit status");
+        }
+        catch(const std::out_of_range&) {
+            throw std::runtime_error("Osc 133 exit status is out of range");
+        }
+
+        CommandOutputFinishedEvent event{
+            .exitCode = exitCode
+        };
+
+        eventHandler(event);
+
+        // The completion marker was recognized and converted into an event
+        return true;
+    }
+
+    // OSC 133 also defines promt/input-region markers such as A and B. Those
+    // are valid terminal metadata byt are not lifecycle events gptbridge needs
+    return false;
 }
 
 
@@ -125,93 +538,83 @@ void ControlProtocolParser::parseFrame(std::string_view payload) {
 
 /**
  * consume()
- * Processes the next chunk of bytes read from the PTY. Incomplete data is
- * retained between calls because a control frame may span multiple PTY reads
+ * Processes the next chunk of bytes read from the PTY. Incomplete OSC data is
+ * retained between calls because terminal control sequences may span multiple
+ * PTY reads
  */
 void ControlProtocolParser::consume(std::string_view bytes) {
     // PTY reads have arbitrary boundaries, so a read may contain only part of
-    // a control frame. Append new bytes to anything retained from the previous
+    // an OSC sequence. Append new bytes to anything retained from the previous
     // call before attempting to classify the stream
     pendingBytes.append(bytes);
 
     // Continue processing until the remaining bytes are either exhausted or
     // incomplete enough that another PTY read is required
     while(!pendingBytes.empty()) {
-        // Look for the next complete occurence of the control-frame prefix
-        const std::size_t prefixPosition = pendingBytes.find(ControlProtocol::framePrefix);
+        // Search for the next OSC introducer. Ever byte before it is ordinary
+        // terminal data and can be forwarded immediately
+        const std::size_t oscPosition = pendingBytes.find(ControlProtocol::oscIntroducer);
 
-        // If a complete prefix is present, every byte before it is ordinary
-        // terminal output and can be emitted immediately
         // std::String_view::npos -> means "not found"
-        if(prefixPosition != std::string::npos) {
-            emitOutput(std::string_view(pendingBytes.data(), prefixPosition));
+        if(oscPosition != std::string::npos) {
+            emitOutput(
+                std::string_view(
+                    pendingBytes.data(),    // First ordinary terminal byte
+                    oscPosition             // Number of bytes before ESC ]
+                )
+            );
 
-            // Remove the ordinary output, leaving the control-frame prefix at
-            // the beginning of pendingBytes for the next parsing step
-            pendingBytes.erase(0, prefixPosition);
+            // Remove the ordinary bytes so the OSC introducer is now positioned
+            // at index 0 for tryParseOscSequence()
+            pendingBytes.erase(
+                    0,              // Begin removing at the start of the buffer
+                    oscPosition     // Remove only the bytes before the OSC sequence
+            );
 
             // Try to classify and consume the frame that now begins at index 0
-            const FrameParseResult frameResult = tryParseFrame();
+            const OscParseResult oscResult = tryParseOscSequence();
 
-            // A complete valid frame was parsed and removed. Continue because
-            // more output or additional frames may already follow in the buffer
-            if(frameResult == FrameParseResult::Consumed) {
+            if(oscResult == OscParseResult::Consumed) {
+                // A complete OSC sequence was processed and removed. Continue
+                // because additional termainal data may already follow it
                 continue;
             }
 
-            // The candidate may be a valid frame, but some of its bytes have
-            // not arrived yet. Preserve pendingBytes unchanged until next read
-            if(frameResult == FrameParseResult::Incomplete) {
+            if(oscResult == OscParseResult::Incomplete) {
+                // Preserve the incomplete OSC sequence exactly as received so
+                // the next PTY read can provide its remaining bytes
                 break;
-            }
-
-            // The fixed prefix matched, but the nonce/session token did not.
-            // There this is ordinary terminal data rather than private control frame
-            if(frameResult == FrameParseResult::NotControlFrame) {
-                // Emit one byte so the parser makes forward progress without
-                // discarding bytes that might contain another valid prefix
-                emitOutput(
-                    std::string_view(
-                        pendingBytes.data(),
-                        1
-                    )
-                );
-
-                // Remove exactly the one byte that was emitted
-                pendingBytes.erase(0, 1);
-
-                // Search the remaining stream again from its new beginning
-                continue;
             }
         }
 
-        // No complete frame prefix is currently present. Keep only the trailing
-        // bytes that could still become the beginning of a prefix on the next read
-        const std::size_t preservedLength = partialPrefixLength();
+        // No complete OSC introducer is currently present. Preserve only a
+        // trailing ESC byte that could become ESC ] when the next read arrives
+        const std::size_t preservedLength = partialOscIntroducerLength();
 
-        // Everything before the possible partial prefix is definitely ordinary
-        // terminal output and can be emitted now
+        // Everything before the possible partial introducer is confirmed
+        // ordinary terminal output and can be emitted now
         const std::size_t outputLength = pendingBytes.size() - preservedLength;
 
         // Forward the confirmed ordinary-output portion of the buffer
         emitOutput(
             std::string_view(
-                pendingBytes.data(),    // Start at the beginning of the buffered bytes
-                outputLength            // Emit everything except the preserved suffix
+                pendingBytes.data(),    // Beginning of confirmed terminal output
+                outputLength            // Exclude any trailing possible ESC prefix
             )
         );
 
-        // Remove the bytes that were just emitted. Any possible partial prefix
-        // remains in pendingBytes for the next consume() call
+        // Remove the bytes hust forwarded while retaining any trailing ESC that
+        // may begin an OSC sequence in the next PTY read
         pendingBytes.erase(
-                0,                      // Begin erasing at the first byte
-                outputLength            // Remove exactly the bytes that were emitted
+                0,                      // Begin erasing at the first buffered byte
+                outputLength            // Remove exactly the bytes that were forwarded
         );
 
         // Nothing more can be classified until another PTY read arrives
         break;
     }
 }
+
 
 /**
  * tryParseFrame()

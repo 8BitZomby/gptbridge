@@ -93,15 +93,16 @@ struct CommandOutputFinishedEvent {
 
 /**
  * ControlEvent
- * Represents one decoded shell lifecycle event received through gptbridge's
- * private control protocol. A control event is exactly one of the supported
- * event structures.
- * std::variant<A, B, C, D, E> means:
- *     Object contains either an A, B, C, D, or E but never more than one
+ * Represents one decoded shell-integration event. A ControlEvent stores
+ * exactly one of the supported semantic event types at a time.
+ *
+ * std::variant<A, B, C, D, E, F> means:
+ *     Object contains either an A, B, C, D, E, or F but never more than one
  */
 using ControlEvent = std::variant <
     CommandStartedEvent,
     CommandFinishedEvent,
+    WorkingDirectoryEvent,
     ExactCommandEvent,
     CommandOutputStartedEvent,
     CommandOutputFinishedEvent >;
@@ -114,7 +115,7 @@ using ControlEvent = std::variant <
  *
  * The new protocol uses standard OSC sequences where possible:
  *   - OSC 7 for current working directory
- *   - OSC133 for command lifeecycle boundaries
+ *   - OSC133 for command lifecycle boundaries
  *
  * Legacy gptbridge JSON framing remains temporarily while the parser and shell
  * integration are migrated to the new protocol.
@@ -148,7 +149,7 @@ namespace ControlProtocol {
 
     // ---- Private gptbridge Command Metadata ---- //
     // Private gptbridge OSC sequence carrying the exact command text reported
-    // by the shell. "E" identifies exect-command metadata. The encoded command
+    // by the shell. "E" identifies exact-command metadata. The encoded command
     // and per-session nonce are appended before the OSC terminator.
     //
     // Format:

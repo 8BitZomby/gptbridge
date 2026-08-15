@@ -52,11 +52,70 @@ class ControlProtocolParser {
         EventHandler eventHandler;
 
         /**
-         * partialPrefixLength()
-         * Returns the number of trailing bytes in pendingBytes that could be
-         * the beginning of a control-frame prefix split actoss PTY reads
+         * OscParseResult
+         * Describes whether an OSC sequence beginning at the start of
+         * pendingBytes was comlpletely processed or requires additional bytes
          */
-        std::size_t partialPrefixLength() const;
+        enum class OscParseResult {
+            Consumed,   // A complete OSC sequence was classified and removed
+            Incomplete  // The OSC sequence is split across PTY reads
+        };
+
+        /**
+         * tryParseOscSequence()
+         * Examines one OSC sequence beginning at the start of pendingBytes.
+         * Relevant OSC 7, OSC 133, and private GPTB sequences are decoded,
+         * while unrelated OSC sequences are forwarded unchanged
+         */
+        OscParseResult tryParseOscSequence();
+
+        /**
+         * parserOsc7()
+         * Decodes the working-directory file URI carried by an OSC 7 sequence
+         * and delivers the resulting WorkingDirectoryEvent
+         */
+        void parserOsc7(std::string_view sequence);
+
+        /**
+         * parseExactCommand()
+         * Decodes and validates gptbridge's private exact-command OSC metadata
+         * and delivers the resulting ExactCommandEvent.
+         *
+         * Returns false when the sequence carries a nonce belonging to another
+         * capture session, allowing those bytes to be forwarded unchanged
+         */
+        bool parseExactCommand(std::string_view sequence);
+
+        /**
+         * parseOsc133()
+         * Decodes supported OSC 133 command lifecycle markers and delivers
+         * CommandOutputStartedEvent or CommandOutputFinishedEvent as appropriate.
+         *
+         * Returns false when the OSC 133 sequence is not one of the lifecycle
+         * forms currently interpreted by gptbridge
+         */
+        bool parseOsc133(std::string_view sequence);
+
+        /**
+         * unescapeCommand()
+         * Reconstructs the exact command text from the escaping used by the
+         * private GPTB command-metadata sequence
+         */
+        static std::string unescapeCommand(std::string_view encodedCommand);
+
+        /**
+         * percentDecodePath()
+         * Reconstructs a filesystem path from the percent-encoded URI path
+         * carried by OSC 7
+         */
+        static std::string percentDecodePath(std::string_view encodedPath);
+
+        /**
+         * partialOscIntroducerLength()
+         * Returns the number of trailing bytes in pendingBytes that could be
+         * the beginning of the OSC introducer split across PTY reads
+         */
+        std::size_t partialOscIntroducerLength() const;
 
         /**
          * FrameParseResult
