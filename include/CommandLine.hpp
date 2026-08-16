@@ -8,6 +8,7 @@ enum class Command {
     Add,
     Capture,
     Clear,
+    Init,
     List,
     Push,
     Remove,

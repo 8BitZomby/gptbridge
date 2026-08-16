@@ -9,6 +9,7 @@ Command parseCommand(const std::string& command) {
     if(command == "add") { return Command::Add; }
     if(command == "capture") { return Command::Capture; }
     if(command == "clear") { return Command::Clear; }
+    if(command == "init") { return Command::Init; }
     if(command == "list") { return Command::List; }
     if(command == "push") { return Command::Push; }
     if(command == "remove") { return Command::Remove; }

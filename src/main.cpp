@@ -1,5 +1,6 @@
 #include "CommandLine.hpp"
 #include "Config.hpp"
+#include "ContextCommands.hpp"
 #include "InteractionHistory.hpp"
 #include "ProjectManager.hpp"
 #include "PtyCaptureBackend.hpp"
@@ -77,6 +78,46 @@ int main(int argc, char* argv[]) {
                 return 0;
             }
 
+            case Command::Clear:
+                return handleClearCommand(argc, argv);
+
+            case Command::Init: {
+                // "gptb init <path> <project-name>" registers and activates a project
+                if(argc != 4) {
+                    std::cout << "Usage: gptb init <path> <project-name>\n";
+                    return 1;
+                }
+
+                // Normalize the supplied project directory into an absolute path
+                const std::filesystem::path projectPath = normalizeProjectPath(argv[2]);
+
+                // The project must point to an existing directory
+                if(!std::filesystem::exists(projectPath)) {
+                    std::cout << "Project path does not exist: "
+                            << projectPath.string() << '\n';
+                    return 1;
+                }
+                if(!std::filesystem::is_directory(projectPath)) {
+                    std::cout << "Project path is not a directory: "
+                            << projectPath.string() << '\n';
+                    return 1;
+                }
+
+                // Save the project name and path in the global project registry
+                const std::string projectName = argv[3];
+                saveProject(projectName, projectPath);
+
+                // Make the newly initialized project active for the current session
+                setActiveProject(projectName);
+
+                // Confirm both the registered project and its normalized directory
+                std::cout << "Initialized project: " << projectName << '\n';
+                std::cout << "Project path: " << projectPath << '\n';
+
+                return 0;
+            }
+
+
             case Command::List: {
                 // "gptb list <type>" currently supports projects and saved sessions
                 if(argc != 3) {
@@ -124,6 +165,12 @@ int main(int argc, char* argv[]) {
                 std::cout << "Usage: gptb list <projects|sessions>\n";
                 return 1;
             }
+
+            case Command::Push:
+                return handlePushCommand(argc, argv);
+
+            case Command::Remove:
+                return handleRemoveCommand(argc, argv);
 
             case Command::Session: {
                 // "gptb session <mode>" changes how active-project state is shared
@@ -317,6 +364,10 @@ int main(int argc, char* argv[]) {
                 std::cout << generateShellInit(argv[2]);
                 return 0;
             }
+
+            case Command::Show:
+                return handleShowCommand(argc, argv);
+
 
             case Command::Status: {
                 std::cout << "gptbridge status\n";

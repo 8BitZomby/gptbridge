@@ -38,6 +38,8 @@ add_executable(gptb
     src/CaptureCoordinator.cpp
     src/Config.cpp
     src/CommandLine.cpp
+    src/ContextCommands.cpp
+    src/ContextPaths.cpp
     src/ControlProtocolParser.cpp
     src/ExecutablePath.cpp
     src/InteractionHistory.cpp
@@ -49,6 +51,9 @@ add_executable(gptb
     src/ShellIntegrationEncoder.cpp
     src/SessionManager.cpp
     src/SessionNonce.cpp
+    src/TemporaryInteractionHistory.cpp
+    src/TerminalContext.cpp
+    src/TerminalInteractionJson.cpp
     src/TimeUtils.cpp
 )
 

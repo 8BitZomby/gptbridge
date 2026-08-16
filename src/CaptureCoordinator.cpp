@@ -6,6 +6,29 @@
 
 
 /**
+ * Constructor: CaptureCoordinator()
+ * Creates capture state for one live gptbridge session and connects it to
+ * that capture's temporary terminal history
+ */
+CaptureCoordinator::CaptureCoordinator(const std::string& captureId) : history(captureId) {}
+
+
+/**
+ * Destructor: ~CaptureCoordinator()
+ * Cleans up the temporary terminal history when the live capture ends
+ */
+CaptureCoordinator::~CaptureCoordinator() {
+    try {
+        // Temporary history only exists for the lifetime of this capture
+        history.clearTmp();
+    }
+    catch(...) {
+        // Cleanup failure must not escapt from a desctuctor
+    }
+}
+
+
+/**
  * commandStarted()
  * Begins a new pending interaction using metadata reported immediately
  * before the shell executes a command
@@ -51,7 +74,7 @@ void CaptureCoordinator::appendOutput(std::string_view output) {
 /**
  * commandFinished()
  * Completes the active interaction using metadata reported after command
- * execution and stores the finished interaction in persisten history
+ * execution and stores the finished interaction in temporary session history
  */
 void CaptureCoordinator::commandFinished(const std::string& interactionId, int exitCode, const std::string& finishedAt) {
     // A finsished event without matching active command would make the capture
@@ -76,7 +99,7 @@ void CaptureCoordinator::commandFinished(const std::string& interactionId, int e
         .finishedAt = finishedAt
     };
 
-    // Persis only completed interactions
+    // Store only completed interactions in this live capture's temporary history
     history.append(interaction);
     // The command is now finished, so clear the active capture state
     pendingInteraction.reset();

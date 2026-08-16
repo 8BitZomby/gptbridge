@@ -3,6 +3,7 @@
 #include "Storage.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -53,9 +54,18 @@ std::string getActiveProject() {
 
 /**
  * getCurrentSessionId()
- * Returns an identifier for the terminal session that invoked gptb
+ * Returns the logical gptbridge session associated with the current terminal
  */
 std::string getCurrentSessionId() {
+
+    // A managed child shell inherits the session ID of the terminal that
+    // launched it, even though forkpty() assigns the child a new PTY device
+    const char* inheritedSessionId = std::getenv("GPTB_SESSION_ID");
+
+    if(inheritedSessionId != nullptr && *inheritedSessionId != '\0') {
+        return inheritedSessionId;
+    }
+
     // ttyname() returns the terminal device attached to standard input,
     // for example "/dev/ttys003" on macOS
     const char* terminal = ttyname(STDIN_FILENO);
