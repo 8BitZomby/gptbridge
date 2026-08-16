@@ -2,6 +2,7 @@
 #include "ControlProtocol.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -39,22 +40,24 @@ std::size_t ControlProtocolParser::partialOscIntroducerLength() const {
     return 0;
 }
 
-
 /**
  * emitOutput()
- * Sends ordinary terminal bytes to the configured output handler.
+ * Sends terminal bytes to the configured output handler together with their
+ * command-output capture eligibility.
  */
-void ControlProtocolParser::emitOutput(std::string_view bytes) {
+void ControlProtocolParser::emitOutput(std::string_view bytes, bool captureEligible) {
     // An empty byte range does not represent any terminal output, so avoid
     // invoking the callback when there is nothing to deliver.
     if(bytes.empty()) {
         return;
     }
 
-    // The parser does not decide what ordinary output means or where it goes.
-    // It only identifies that these bytes are not part of a control frame and
-    // passes them to the component responsible for terminal/output handling.
-    outputHandler(bytes);
+    // The parser classifies the bytes but leaves terminal forwarding and persistent
+    // capture policy to the configured output handler.
+    outputHandler(
+            bytes,          // Exact terminal bytes to forward
+            captureEligible // Whether these bytes may be stored as command output
+    );
 }
 
 
@@ -63,6 +66,10 @@ void ControlProtocolParser::emitOutput(std::string_view bytes) {
  * Examines one OSC sequence beginning at the start of pendingBytes. Relevant
  * shell-integration sequences are decoded into semantic events, while unrelated
  * OSC sequences remain ordinary terminal data and are forwarded unchanged
+ *
+ * OSC sequences may terminate with either ST (ESC \) or BEL (0x07). When both
+ * forms appear in the buffered data, whichever occurs first terminates the
+ * current OSC sequence.
  */
 ControlProtocolParser::OscParseResult ControlProtocolParser::tryParseOscSequence() {
     // This helper is called only after consume() has positioned an OSC
@@ -71,22 +78,48 @@ ControlProtocolParser::OscParseResult ControlProtocolParser::tryParseOscSequence
         throw std::runtime_error("OSC parser called without OSC introducer");
     }
 
-    // Search for the ST terminator that closes this OSC sequence
-    const std::size_t terminatorPosition =
+    // Search independently for both supported OSC terminators:
+    //
+    //   ST  -> ESC \
+    //   BEL -> 0x07
+    //
+    // Other shell integrations may use either form even though gptbridge emits
+    // its own sequences using ST
+    const std::size_t stPosition =
         pendingBytes.find(
             ControlProtocol::oscTerminator,
             ControlProtocol::oscIntroducer.size()
         );
 
-    // The OSC sequence may be split across arbitrary PTY reads. Preserve all
-    // currently buffered bytes until its terminator arrives
-    if(terminatorPosition == std::string::npos) {
+    const std::size_t bellPosition =
+        pendingBytes.find(
+            ControlProtocol::oscBellTerminator,
+            ControlProtocol::oscIntroducer.size()
+        );
+
+    // If neither terminator has arrived, the OSC sequence may be split across
+    // PTY reads. Preserve the complete candidate until more bytes are received
+    if(stPosition == std::string::npos && bellPosition == std::string::npos) {
         return OscParseResult::Incomplete;
     }
 
-    // Include the complete ST terminator in the sequence view and removal size
-    const std::size_t sequenceLength =
-        terminatorPosition + ControlProtocol::oscTerminator.size();
+    // Determine which terminator closes the current OSC sequence. If only one
+    // exists, use it. If both exist, the earlier one is the actual terminator
+    std::size_t terminatorPosition = 0;
+    std::size_t terminatorLength = 0;
+
+    if(bellPosition != std::string::npos && (stPosition == std::string::npos || bellPosition < stPosition)) {
+        terminatorPosition = bellPosition;
+        terminatorLength = 1;
+    }
+    else {
+        terminatorPosition = stPosition;
+        terminatorLength = ControlProtocol::oscTerminator.size();
+    }
+
+    // Include the selected terminator in both the sequence view and the number
+    // of bytes removed from pendingBytes
+    const std::size_t sequenceLength = terminatorPosition + terminatorLength;
 
     const std::string_view sequence(
         pendingBytes.data(),    // First byte of the OSC introducer
@@ -94,21 +127,30 @@ ControlProtocolParser::OscParseResult ControlProtocolParser::tryParseOscSequence
     );
 
     bool suppressSequence = false;
+    bool captureEligible = true;
 
     if(sequence.starts_with(ControlProtocol::osc7Prefix)) {
         // OSC 7 is standard terminal metadata. Decode it for gptbridge while
         // still forwarding the original sequence to the outer terminal
         parserOsc7(sequence);
+        captureEligible = false;
     }
     else if(sequence.starts_with(ControlProtocol::osc133Prefix)) {
         // Only the OSC 133 lifecycle forms understood by gptbridge produce
         // semantic events. Other OSC 133 forms remain valid terminal data
         (void)parseOsc133(sequence);
+        captureEligible = false;
     }
     else if(sequence.starts_with(ControlProtocol::exactCommandPrefix)) {
         // Private GPTB command metadata is consumed only when its nonce belongs
         // to this capture session. Foreign sequences are forwarded unchanged
         suppressSequence = parseExactCommand(sequence);
+    }
+    else if(sequence.starts_with(ControlProtocol::shellPresentationPrefix)) {
+        // The private presentation marker identifies the point where shell
+        // presentation bytes begin. A validated marker is consumed internally
+        // while a marker from another session remains ordinary terminal data
+        suppressSequence = parseShellPresentationStart(sequence);
     }
     else if(sequence.starts_with(ControlProtocol::framePrefix)) {
         // The JSON-based GPTB frame parser remains available while that
@@ -127,7 +169,12 @@ ControlProtocolParser::OscParseResult ControlProtocolParser::tryParseOscSequence
     }
 
     if(!suppressSequence) {
-        emitOutput(sequence);
+        // Standard and unrelated OSC sequences remain in the visible terminal
+        // stream after any gptbridge-relevant metadata has been observed
+        emitOutput(
+                sequence,           // Complete OSC sequence
+                captureEligible     // False for OSC 7 and OSC 133 metadata
+        );
     }
 
     // Remove the complete OSC sequence after it has either been forwarded or
@@ -212,23 +259,38 @@ void ControlProtocolParser::parserOsc7(std::string_view sequence) {
     // The caller classifies the sequence before dispatching it here, so an OSC 7
     // sequence must begin with the standard OSC 7 prefix
     if(!sequence.starts_with(ControlProtocol::osc7Prefix)) {
-        throw std::runtime_error("OSC 7 parser called with invalud prefix");
+        throw std::runtime_error("OSC 7 parser called with invalid prefix");
     }
 
-    // A complete OSC sequence must end with the standard ST terminator
-    if(!sequence.ends_with(ControlProtocol::oscTerminator)) {
-        throw std::runtime_error("OSC 7 sequence missing terminator");
+    // Determine which supported OSC terminator closes this sequence. This
+    // length is needed so the terminator is excluded from the URI payload
+    std::size_t terminatorLength = 0;
+
+    if(sequence.ends_with(ControlProtocol::oscTerminator)) {
+        // ST consists of the two bytes ESC \.
+        terminatorLength = ControlProtocol::oscTerminator.size();
+    }
+    else if(!sequence.empty() && sequence.back() == ControlProtocol::oscBellTerminator) {
+        // BEL terminates the OSC sequence with one byte
+        terminatorLength = 1;
+    }
+    else {
+        throw std::runtime_error("OSC 7 sequence missing supported terminator");
     }
 
     const std::size_t payloadStart = ControlProtocol::osc7Prefix.size();
+
+    // The payload occupies everything between the fixed OSC 7 prefix and the
+    // selected ST/BEL terminator
     const std::size_t payloadLength =
         sequence.size() -
         ControlProtocol::osc7Prefix.size() -
-        ControlProtocol::oscTerminator.size();
+        terminatorLength;
 
-    // View only the URI carried between "OSC7;" and the ST terminator
+    // View only the URI carried between the OSC 7 prefix and its
+    // selected ST or BEL terminator
     const std::string_view uri(
-            sequence.data() - payloadStart,
+            sequence.data() + payloadStart,
             payloadLength
     );
 
@@ -248,9 +310,8 @@ void ControlProtocolParser::parserOsc7(std::string_view sequence) {
         throw std::runtime_error("OSC 7 file URI does not contain a path");
     }
 
-    // The hostname identifies where the path resides. The current capture
-    // backend interprets OSC 7 only as working-directory metadata for the local
-    // shell, so the path itself is the value needed by the semantic event
+    // CaptureCoordinator needs the filesystem path rather than the URI
+    // hostname, so decode only the path portion
     const std::string_view encodedPath = uri.substr(pathStart);
 
     const std::string decodedPath = percentDecodePath(encodedPath);
@@ -349,7 +410,7 @@ std::string ControlProtocolParser::unescapeCommand(std::string_view encodedComma
  * Decodes gptbridge's private exact-command OSC metadata and validates that
  * the sequence belongs to the current capture session.
  *
- * Returns true when the private sequence was accepted and should be supressed
+ * Returns true when the private sequence was accepted and should be suppressed
  * from visible terminal output. A nonce mismatch returns false so unrelated
  * GPTB-looking terminal data can pass through unchanged.
  */
@@ -406,6 +467,59 @@ bool ControlProtocolParser::parseExactCommand(std::string_view sequence) {
     return true;
 }
 
+/**
+ * parseShellPresentationStart()
+ * Validates gptbridge's private shell-presentation boundary and delivers a
+ * ShellPresentationStartedEvent when the marker belongs to this capture session.
+ *
+ * Format:
+ *   ESC ] GPTB ; P ; <nonce> ESC \
+ *
+ * Returns true when the marker is accepted and should be suppressed from
+ * visible terminal output. A nonce mismatch returns false so unrelated
+ * GPTB-looking terminal data can pass through unchanged.
+ */
+bool ControlProtocolParser::parseShellPresentationStart(std::string_view sequence) {
+    // The caller dispatches only sequences beginning with the private
+    // shell-presentation prefix, so any other prefix is a parser error
+    if(!sequence.starts_with(ControlProtocol::shellPresentationPrefix)) {
+        throw std::runtime_error("Shell-presentation parser called with invalid prefix");
+    }
+
+    // Private GPTB sequences always use ST (ESC \) as their terminator
+    if(!sequence.ends_with(ControlProtocol::oscTerminator)) {
+        throw std::runtime_error("Shell-presentation sequence missing terminator");
+    }
+
+    const std::size_t nonceStart = ControlProtocol::shellPresentationPrefix.size();
+
+    const std::size_t nonceLength =
+        sequence.size() -
+        ControlProtocol::shellPresentationPrefix.size() -
+        ControlProtocol::oscTerminator.size();
+
+    // The presentation marker payload consists only of the capture-session
+    // nonce between the fixed GPTB;P prefix and the OSC terminator
+    const std::string_view candidateNonce(
+        sequence.data() + nonceStart,
+        nonceLength
+    );
+
+    // A different nonce means this private-looking marker was not emitted for
+    // the capture session handled by this parser
+    if(candidateNonce != sessionNonce) {
+        return false;
+    }
+
+    // The marker has no additional payload. Its position in the ordered PTY
+    // stream is itself the semantic event that presentation bytes begin here
+    eventHandler(ShellPresentationStartedEvent{});
+
+    // A validated GPTB private marker must not be shown in the user's terminal
+    return true;
+}
+
+
 
 /**
  * parseOsc133()
@@ -414,6 +528,8 @@ bool ControlProtocolParser::parseExactCommand(std::string_view sequence) {
  * Returns true when the sequence represents a lifecycle event understood by
  * gptbridge. Other OSC 133 forms return false so they can remain ordinary
  * terminal metadata and still be forwarded unchanged
+ *
+ * Standard OSC 133 sequences may terminate with either ST (ESC \) or BEL
  */
 bool ControlProtocolParser::parseOsc133(std::string_view sequence) {
     // The caller dispatches only OSC 133 sequences to this helper
@@ -421,17 +537,27 @@ bool ControlProtocolParser::parseOsc133(std::string_view sequence) {
         throw std::runtime_error("OSC 133 parser called with invalid prefix");
     }
 
-    // Every complete OSc sequence must end with the ST terminator
-    if(!sequence.ends_with(ControlProtocol::oscTerminator)) {
-        throw std::runtime_error("OSC 133 sequence missing terminator");
+    // Determine which supported OSC terminator closes this sequence
+    std::size_t terminatorLength = 0;
+
+    if(sequence.ends_with(ControlProtocol::oscTerminator)) {
+        terminatorLength = ControlProtocol::oscTerminator.size();
+    }
+    else if(!sequence.empty() && sequence.back() == ControlProtocol::oscBellTerminator) {
+        terminatorLength = 1;
+    }
+    else {
+        throw std::runtime_error("OSC 133 sequence missing supported terminator");
     }
 
-    // OSC 133;C is a complete fixed sequence marking the transition into the
-    // command-output region
-    if(sequence == ControlProtocol::commandOutputStart) {
+    // OSC 133;C has no payload after C. Compare the semantic portion without
+    // depending on whether the sender chose ST or BEL as its terminator
+    constexpr std::string_view commandOutputStartPrefix = "\x1b]133;C";
+
+    if(sequence.size() == commandOutputStartPrefix.size() + terminatorLength && sequence.starts_with(commandOutputStartPrefix)) {
         eventHandler(CommandOutputStartedEvent{});
 
-        // The sequence was recognized and produce a semantic lifecycle event
+        // The C marker was recognized as a command-output lifecycle boundary
         return true;
     }
 
@@ -442,9 +568,9 @@ bool ControlProtocolParser::parseOsc133(std::string_view sequence) {
         const std::size_t statusLength =
             sequence.size() -
             ControlProtocol::commandFinishedPrefix.size() -
-            ControlProtocol::oscTerminator.size();
+            terminatorLength;
 
-        // Extract only the decimal exit-status field between "D;" and ST
+        // Extract only the decimal exit-status field between "D;" and the selected OSC terminator
         const std::string statusText = std::string(sequence.substr(statusStart, statusLength));
 
         if(statusText.empty()) {
@@ -454,13 +580,13 @@ bool ControlProtocolParser::parseOsc133(std::string_view sequence) {
         int exitCode = 0;
 
         try {
-            // Require the entire field to be a valid decimal integer rather
-            // than accepting a numeric prefix followed by invalid characters
+            // Require the entire status field to be a decimal integer rather
+            // than accepting an initial numeric prefix
             std::size_t parsedLength = 0;
 
             exitCode = std::stoi(
                 statusText,     // Decimal exit status from OSC 133;D
-                &parsedLength   // Receives the number of character passed
+                &parsedLength   // Number of characters consumed by std::stoi()
             );
 
             if(parsedLength != statusText.size()) {
@@ -471,7 +597,7 @@ bool ControlProtocolParser::parseOsc133(std::string_view sequence) {
             throw std::runtime_error("Invalid OSC 133 exit status");
         }
         catch(const std::out_of_range&) {
-            throw std::runtime_error("Osc 133 exit status is out of range");
+            throw std::runtime_error("OSC 133 exit status is out of range");
         }
 
         CommandOutputFinishedEvent event{
@@ -480,12 +606,12 @@ bool ControlProtocolParser::parseOsc133(std::string_view sequence) {
 
         eventHandler(event);
 
-        // The completion marker was recognized and converted into an event
+        // The D marker was recognized and converted into a completion event
         return true;
     }
 
-    // OSC 133 also defines promt/input-region markers such as A and B. Those
-    // are valid terminal metadata byt are not lifecycle events gptbridge needs
+    // OSC 133 also defines prompt/input-region markers such as A and B. They remain
+    // valid terminal metadata but do not affect gptbridge's capture lifecycle
     return false;
 }
 

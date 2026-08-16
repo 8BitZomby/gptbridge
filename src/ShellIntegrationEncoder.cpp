@@ -55,6 +55,43 @@ std::string ShellIntegrationEncoder::encodeExactCommand(std::string_view command
     return sequence;
 }
 
+/**
+ * encodeShellPresentationStart()
+ * Encodes the private GPTB marker that identifies the beginning of shell
+ * presentation bytes for the current capture session.
+ *
+ * Format:
+ *   ESC ] GPTB ; P ; <nonce> ESC \
+ */
+std::string ShellIntegrationEncoder::encodeShellPresentationStart(std::string_view sessionNonce) {
+    // The private marker must identify the capture session that produced it
+    if(sessionNonce.empty()) {
+        throw std::runtime_error("Cannot encode shell-presentation marker with empty session");
+    }
+
+    // The nonce occupies a semicolon-delimited protocol field, so allowing a
+    // separator inside it would make the marker ambiguous to parse
+    if(sessionNonce.find(ControlProtocol::fieldSeparator) != std::string_view::npos) {
+        throw std::runtime_error("Session nonce contains invalid separator");
+    }
+
+    std::string sequence;
+
+    // Reserve storage for the fixed prefix, nonce, and OSC terminator
+    sequence.reserve(
+            ControlProtocol::shellPresentationPrefix.size() +
+            sessionNonce.size() +
+            ControlProtocol::oscTerminator.size()
+    );
+
+    // Construct the complete private OSC sequence
+    sequence.append(ControlProtocol::shellPresentationPrefix);
+    sequence.append(sessionNonce);
+    sequence.append(ControlProtocol::oscTerminator);
+
+    return sequence;
+}
+
 
 /**
  * encodeCommandOutputStart()

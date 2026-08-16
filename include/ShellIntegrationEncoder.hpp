@@ -29,6 +29,15 @@ class ShellIntegrationEncoder {
         static std::string encodeExactCommand(std::string_view command, std::string_view sessionNonce);
 
         /**
+         * encodeShellPresentationStart()
+         * Encodes the private GPTB marker that identifies the beginning of the shell
+         * presentation bytes that should remain visible but should not be persisted
+         * as command output
+         */
+        static std::string encodeShellPresentationStart(std::string_view sessionNonce);
+
+
+        /**
          * encodeWorkingDirectory()
          * Encodes the current working directory using standard OSC 7
          */

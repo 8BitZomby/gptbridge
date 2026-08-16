@@ -3,12 +3,14 @@
 #include "ControlProtocolParser.hpp"
 #include "ExecutablePath.hpp"
 #include "SessionNonce.hpp"
+#include "TimeUtils.hpp"
 
 #include <cerrno>
 #include <cstdlib>
 #include <poll.h>
 #include <stdexcept>
 #include <signal.h>
+#include <string>
 #include <string_view>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
@@ -504,24 +506,32 @@ PtyCaptureBackend::DescriptorCondition PtyCaptureBackend::checkDescriptorConditi
     return DescriptorCondition::Continue;
 }
 
-
 /**
  * handleControlEvent()
- * Dispatches one decoded control event to the matching CaptureCoordinator operation.
- *  ControlEvent is a std::variant that store exactly one supported event type at a time.
- *  std::visit extracts the concrete event currently stored in the variant
- *  so it can be dispatched to the matching CaptureCoordinator method.
+ * Dispatches one decoded shell-integration event according to its semantic role.
+ *
+ * Complete legacy lifecycle events can be sent directly to CaptureCoordinator.
+ * OSC metadata events are accumulated in OscCaptureState until OSC 133;C begins
+ * an interaction. A private shell-presentation marker stops subsequent terminal
+ * presentation bytes from being persisted, while OSC 133;D completes the active
+ * interaction and restores normal output capture.
+ *
+ * ControlEvent is a std::variant containing exactly one supported event type.
+ * std::visit extracts that concrete type so the appropriate operation can be
+ * selected at compile time.
  */
-void PtyCaptureBackend::handleControlEvent(const ControlEvent& event, CaptureCoordinator& captureCoordinator) {
+void PtyCaptureBackend::handleControlEvent(
+        const ControlEvent& event, CaptureCoordinator& captureCoordinator, OscCaptureState& oscCaptureState) {
     // std::visit() calls this lambda with whichever concrete event type
     // is currently stored inside the ControlEvent variant
     std::visit(
-        [&captureCoordinator](const auto& concreteEvent) {
+        [&captureCoordinator, &oscCaptureState](const auto& concreteEvent) {
+            // Remove const/reference qualifiers so the concrete variant type can
+            // be compared with each supported event type at compile time.
+            //
             // decltype() gets the exact parameter type, which includes const and &.
             // std::decay_t removes those modifiers so only the underlying event
             // type remains, e.g. CommandStartedEvent or CommandFinishedEvent.
-            // Resolve the concrete event type so the matching coordinator
-            // operation can be selected at compile time
             using EventType = std::decay_t<decltype(concreteEvent)>;
 
             // std::is_same_v compares two types at compile time.
@@ -529,6 +539,8 @@ void PtyCaptureBackend::handleControlEvent(const ControlEvent& event, CaptureCoo
             // For the CommandStartedEvent version of this generic lambda,
             // if constexpr keeps only this branch during compilation.
             if constexpr (std::is_same_v<EventType, CommandStartedEvent>) {
+                // JSON-based command-start events already contain every field
+                // required to begin the interaction
                 captureCoordinator.commandStarted(
                     concreteEvent.interactionId,
                     concreteEvent.command,
@@ -543,16 +555,111 @@ void PtyCaptureBackend::handleControlEvent(const ControlEvent& event, CaptureCoo
             // Runtime determines which variant alternative is currently stored
             // Compile time determines which branch is valid for each possible event type
             else if constexpr(std::is_same_v<EventType, CommandFinishedEvent>) {
+                // JSON-based completion events carry the matching interaction
+                // ID, exit status, and completion timestamp directly
                 captureCoordinator.commandFinished(
                     concreteEvent.interactionId,
                     concreteEvent.exitCode,
                     concreteEvent.finishedAt
                 );
             }
+
+            else if constexpr(std::is_same_v<EventType, WorkingDirectoryEvent>) {
+                // OSC 7 supplies the directory for the command whose execution
+                // metadata is currently being assembled
+                oscCaptureState.workingDirectory = concreteEvent.workingDirectory;
+            }
+
+            else if constexpr(std::is_same_v<EventType, ExactCommandEvent>) {
+                // A successfully validated private GPTB sequence supplies the
+                // exact command text and identifies an upcoming gptbridge-managed
+                // command lifecycle
+                oscCaptureState.exactCommand = concreteEvent.command;
+            }
+
+            else if constexpr(std::is_same_v<EventType, ShellPresentationStartedEvent>) {
+                // Presentation suppression is meaningful only while a gptbridge-managed
+                // OSC interaction is active
+                if(!oscCaptureState.activeInteractionId.has_value()) {
+                    return;
+                }
+
+                // Subsequent ordinary PTY bytes must remain visible in the real
+                // terminal but must no longer be appended to command history
+                oscCaptureState.suppressCapturedOutput = true;
+            }
+
+            else if constexpr(std::is_same_v<EventType, CommandOutputStartedEvent>) {
+                // OSC 133 is also emitted by other shell integrations. Without
+                // validated private GPTB command metadata, this C marker does
+                // not belong to a command gptbridge should capture
+                if(!oscCaptureState.exactCommand.has_value()) {
+                    return;
+                }
+
+                // A gptbridge command must also have received its OSC 7 working
+                // directory before the authoritative OSC 133;C boundary
+                if(!oscCaptureState.workingDirectory.has_value()) {
+                    throw std::runtime_error(
+                            "OSC command started without working-directory metadata"
+                    );
+                }
+
+                // Receiving another gptbridge command start while one is active
+                // would make output association ambiguous
+                if(oscCaptureState.activeInteractionId.has_value()) {
+                    throw std::runtime_error(
+                            "OSC command started while another interaction is active"
+                    );
+                }
+
+                // Every new command begins with output capture enabled. Any
+                // presentation suppression belongs only to the preceding command
+                oscCaptureState.suppressCapturedOutput = false;
+
+                // Interaction IDs are internal correlation values. The ordered
+                // OSC stream allows the parent to generate them rather than
+                // requiring the shell to transmit an ID
+                const std::string interactionId = std::to_string(oscCaptureState.nextInteractionId++);
+
+                captureCoordinator.commandStarted(
+                    interactionId,                          // parent-generated ID
+                    *oscCaptureState.exactCommand,          // Exact shell command
+                    *oscCaptureState.workingDirectory,      // OSC 7 directory
+                    currentTimestampUtc()                   // Time C was parsed
+                );
+
+                // Remember the ID until OSC 133;D completes this interaction
+                oscCaptureState.activeInteractionId = interactionId;
+
+                // Command and directory metadata have now been consumed by this
+                // interaction. Requiring fresh values prevents a later malformed
+                // start sequence from silently reusing metadata from this command
+                oscCaptureState.exactCommand.reset();
+                oscCaptureState.workingDirectory.reset();
+            }
+
+            else if constexpr(std::is_same_v<EventType, CommandOutputFinishedEvent>) {
+                // Ignore OSC 133;D emitted by another shell integration when
+                // gptbridge has no OSC-managed interaction currently active
+                if(!oscCaptureState.activeInteractionId.has_value()) {
+                    return;
+                }
+
+                captureCoordinator.commandFinished(
+                    *oscCaptureState.activeInteractionId,   // ID assigned at C
+                    concreteEvent.exitCode,                 // Status carried by D
+                    currentTimestampUtc()                   // Time D was parsed
+                );
+
+                // OSC 133;D closes both the command lifecycle and any
+                // presentation-only output region belonging to that command
+                oscCaptureState.activeInteractionId.reset();
+                oscCaptureState.suppressCapturedOutput = false;
+            }
         },
 
-        // The ControlEvent variant whose currently stored value std::visit()
-        // will pass into the lambda above
+        // Variant containing exactly one decoded shell-integration event
         event
     );
 }
@@ -632,19 +739,23 @@ void PtyCaptureBackend::runSession() {
     // while the PTY session is running
     CaptureCoordinator captureCoordinator;
 
-    // Handles bytes that the protocol parser identifies as ordinary terminal
-    // output rather than private gptbridge control data
-    // OutputHandler is an alias for std::function<void(std::string_view)>.
-    // It stores any callable object that accepts a string_view and returns nothing
+    // Accumulates OSC command metadata and lifecycle state for this PTY session.
+    // Keeping it local prevents command state from surviving across sessions
+    OscCaptureState oscCaptureState;
+
+    // OutputHandler receives terminal bytes together with the parser's
+    // classification of whether those bytes may be persisted as command output.
     ControlProtocolParser::OutputHandler outputHandler =
-        // This lambda provides the callable stored inside OutputHandler
+        // OutputHandler receives every byte the parser classifies as ordinary
+        // terminal output. Those bytes always remain visible, while persistence
+        // is controlled separately by the current OSC presentation state
         //
         // [&captureCoordinator] captures the existing CaptureCoordinator by
         // reference so the callback can update the same object when it runs
         //
         // (std::string_view output) is the argument the parser supplies whenever
         // it identifies a range of bytes as ordinary terminal output
-        [&captureCoordinator](std::string_view output) {
+        [&captureCoordinator, &oscCaptureState](std::string_view output, bool captureEligible) {
             // Keep ordinary child-shell output visible in the real terminal
             writeAll(
                 STDOUT_FILENO,  // Destination: the real terminal's standard output
@@ -652,20 +763,22 @@ void PtyCaptureBackend::runSession() {
                 output.size()   // Number of ordinary output bytes to write
             );
 
-            // Associate the same output with the command currently being captured
-            captureCoordinator.appendOutput(output);
+            // Persist only ordinary command output. Standard shell metadata and the
+            // presentation region following GPTB;P remain visible but are excluded
+            if(captureEligible && !oscCaptureState.suppressCapturedOutput) {
+                captureCoordinator.appendOutput(output);
+            }
         };
 
-    // EventHandler is an alias for std::function<void(const ControlEvent&)>.
-    // It stores a callable that receives one decoded control event from the parser
+    // EventHandler receives semantic events decoded from the PTY stream and
+    // applies them to the coordinator or the session's accumulated OSC state
     ControlProtocolParser::EventHandler eventHandler =
-        // Capture this PtyCaptureBacked object so the lambda can call
-        // handleControlEvent(), and capture the existing coordinator by reference
-        // so the same capture state is updated
-        [this, &captureCoordinator](const ControlEvent& event) {
-            // Forward the decoded event to the helper that determines whether it
-            // represents a command start or command finish
-            handleControlEvent(event, captureCoordinator);
+        [this, &captureCoordinator, &oscCaptureState](const ControlEvent& event) {
+            handleControlEvent(
+                    event,                  // Semantic event decoded by the parser
+                    captureCoordinator,     // Owns the active/completed interaction
+                    oscCaptureState         // Holds OSC metadata between markers
+            );
         };
 
     // Create the parser that will inspect PTY output for this session.

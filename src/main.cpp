@@ -163,7 +163,7 @@ int main(int argc, char* argv[]) {
                  */
                 if(argc < 3) {
                     std::cerr << "Usage: gptb shell-event "
-                            << "<started|finished|osc-started|osc-finished> ...\n";
+                            << "<started|finished|osc-started|osc-presentation-start|osc-finished> ...\n";
                     return 1;
                 }
 
@@ -339,6 +339,32 @@ int main(int argc, char* argv[]) {
                     return 0;
                 }
 
+                // ----####---- OSC-PRESENTATION-START ----####---- //
+                if(eventType == "osc-presentation-start") {
+                    // The presentation marker is private to gptbridge and therefore carries
+                    // the capture-session nonce used to validate its origin
+                    const char* sessionNonce = std::getenv("GPTB_SESSION_NONCE");
+
+                    if(sessionNonce == nullptr || *sessionNonce == '\0') {
+                        std::cerr << "gptb: GPTB_SESSION_NONCE is not set\n";
+                        return 1;
+                    }
+
+                    // The marker identifies the point where shell-generated presentation
+                    // bytes begin and should stop being persisted as command output
+                    const std::string presentationSequence =
+                        ShellIntegrationEncoder::encodeShellPresentationStart(
+                            sessionNonce    // Capture-session validation token
+                    );
+
+                    // Write the private marker into the captured PTY stream. The parser
+                    // will consume it rather than forwarding it to the visible terminal
+                    std::cout << presentationSequence;
+                    std::cout.flush();
+
+                    return 0;
+                }
+
                 // ----####---- OSC-FINISHED ----####---- //
                 if(eventType == "osc-finished") {
                     // Command completion requires only the exit status carried by OSC 133;D
@@ -382,10 +408,12 @@ int main(int argc, char* argv[]) {
                     return 0;
                 }
 
+                // ----####---- UNKNOWN-SHELL-EVENT ----####---- //
                 // Reject event names that do not correspond to a supported shell
                 // encoding operation
                 std::cerr << "Unknown shell event type: " << eventType << '\n';
                 return 1;
+
             }
 
             case Command::ShellInit: {

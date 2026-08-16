@@ -6,7 +6,9 @@
 #include "ControlProtocolParser.hpp"
 
 #include <array>
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <poll.h>
 #include <string>
 #include <sys/ioctl.h>
@@ -67,8 +69,37 @@ class PtyCaptureBackend : public CaptureBackend {
         // Checks descriptor conditions and determines whether the session should continue
         DescriptorCondition checkDescriptorConditions(const std::array<pollfd, 2>& descriptors) const;
 
-        // Dispatches a decoded control event to the appropriate capture-coordinator operation
-        void handleControlEvent(const ControlEvent& event, CaptureCoordinator& captureCoordinator);
+        /**
+         * OscCaptureState
+         * Holds command metadata and lifecycle state accumulated from shell-integration
+         * events for the current PTY session.
+         *
+         * OSC 7 and private GPTB command metadata are accumulated before OSC 133;C.
+         * OSC 133;C begins the interaction, while a private GPTB presentation marker
+         * can temporarily stop shell-generated presentation bytes from being persisted
+         * before OSC 133;D completes the interaction.
+         */
+        struct OscCaptureState {
+            // Working directory reported by the standard OSC 7 sequence
+            std::optional<std::filesystem::path> workingDirectory;
+
+            // Exact command text reported by the private GPTB OSC sequence
+            std::optional<std::string> exactCommand;
+
+            // Parent-generated ID for the currently active OSC interaction
+            std::optional<std::string> activeInteractionId;
+
+            // True after the private shell-presentation marker has been received.
+            // Output remains visible in the terminal but is not stored in history
+            bool suppressCapturedOutput = false;
+
+            // Monotonically increasing value used to generate interaction IDs within this capture session
+            std::uint64_t nextInteractionId = 1;
+        };
+
+        // Dispatches decoded lifecycle and metadata events to the capture state or the
+        // appropriate CaptureCoordinator operation
+        void handleControlEvent(const ControlEvent& event, CaptureCoordinator& captureCoordinator, OscCaptureState& oscCaptureState);
 };
 
 

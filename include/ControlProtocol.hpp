@@ -70,6 +70,14 @@ struct ExactCommandEvent {
     std::string command;
 };
 
+/**
+ * ShellPresentationStartedEvent
+ * Marks the point where zsh begins emitting prompt-related presentation bytes
+ * that should remain visible in the terminal but should not be stored as
+ * command output.
+ */
+struct ShellPresentationStartedEvent{};
+
 
 /**
  * CommandOutputStartedEvent
@@ -104,6 +112,7 @@ using ControlEvent = std::variant <
     CommandFinishedEvent,
     WorkingDirectoryEvent,
     ExactCommandEvent,
+    ShellPresentationStartedEvent,
     CommandOutputStartedEvent,
     CommandOutputFinishedEvent >;
 
@@ -147,7 +156,8 @@ namespace ControlProtocol {
     inline constexpr std::string_view commandFinishedPrefix = "\x1b]133;D;";
 
 
-    // ---- Private gptbridge Command Metadata ---- //
+    // ---- Private gptbridge Shell Metadata ---- //
+
     // Private gptbridge OSC sequence carrying the exact command text reported
     // by the shell. "E" identifies exact-command metadata. The encoded command
     // and per-session nonce are appended before the OSC terminator.
@@ -160,6 +170,15 @@ namespace ControlProtocol {
     // be mistaken for framing bytes.
     inline constexpr std::string_view exactCommandPrefix = "\x1b]GPTB;E;";
 
+    // Private gptbridge OSC sequence marking the beginning of shell-generated
+    // presentation bytes that should remain visible but should not be persisted
+    // as command output.
+    //
+    // Format:
+    //   ESC ] GPTB ; P ; <nonce> ESC \
+    //
+    inline constexpr std::string_view shellPresentationPrefix = "\x1b]GPTB;P;";
+
 
     // ---- Legacy gptbridge Control Framing ---- //
 
@@ -167,6 +186,11 @@ namespace ControlProtocol {
     // control frame inside the shared PTY output stream
     inline constexpr std::string_view framePrefix = "\x1b]GPTB;";
     inline constexpr std::string_view frameTerminator = oscTerminator;
+
+    // OSC sequences may also be terminated by BEL (0x07). gptbridge emits ST
+    // itself, but the parser accepts BEL for compatibility with terminal metadata
+    // produced by other shell integrations.
+    inline constexpr char oscBellTerminator = '\x07';
 
     // Separates variable-length fields inside the control-frame header
     inline constexpr char fieldSeparator = ';';

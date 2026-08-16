@@ -3,6 +3,7 @@
 
 #include "ControlProtocol.hpp"
 
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -18,10 +19,12 @@ class ControlProtocolParser {
     public:
         /**
          * OutputHandler
-         * Receives ordinary terminal bytes that are not part of a valid
-         * gptbridge control frame.
+         * Receives terminal bytes that should be forwarded to the real terminal.
+         *
+         * captureEligible distinguishes ordinary command output from standard terminal
+         * metadata that must remain visible but must not be persisted as command output
          */
-        using OutputHandler = std::function<void(std::string_view)>;
+        using OutputHandler = std::function<void(std::string_view, bool captureEligible)>;
 
         /**
          * EventHandler
@@ -87,6 +90,17 @@ class ControlProtocolParser {
         bool parseExactCommand(std::string_view sequence);
 
         /**
+        * parseShellPresentationStart()
+        * Decodes and validates gptbridge's private shell-presentation boundary.
+        * A valid marker delivers a ShellPresentationStartedEvent identifying where
+        * subsequent shell presentation bytes begin.
+        *
+        * Returns false when the sequence carries a nonce belonging to another
+        * capture session, allowing those bytes to be forwarded unchanged.
+        */
+        bool parseShellPresentationStart(std::string_view sequence);
+
+        /**
          * parseOsc133()
          * Decodes supported OSC 133 command lifecycle markers and delivers
          * CommandOutputStartedEvent or CommandOutputFinishedEvent as appropriate.
@@ -143,10 +157,11 @@ class ControlProtocolParser {
         std::size_t parsePayloadLength(std::size_t lengthStart, std::size_t lengthEnd) const;
 
         /**
-         * emitOutput()
-         * Sends ordinary terminal bytes to the configured output handler
-         */
-        void emitOutput(std::string_view bytes);
+        * emitOutput()
+        * Sends terminal bytes to the configured output handler and identifies whether
+        * those bytes are eligible to be persisted as command output.
+        */
+        void emitOutput(std::string_view bytes, bool captureEligible = true);
 
         /**
          * parseFrame()
