@@ -243,7 +243,7 @@ void PtyCaptureBackend::updatePtyWindowSize(int masterFd) {
     const char* shell = std::getenv("SHELL");
 
     // Make this capture session's nonce available to the child shell so shell-
-    // side hooks can include it in every gptbridge control frame they emit
+    // side hooks can include it in private gptbridge OSC metadata they emit
     // Pass c-style string. The 1 means overwrite any existing string
     if(setenv("GPTB_SESSION_NONCE", sessionNonce.c_str(), 1) == -1) {
         _exit(1);
@@ -360,8 +360,8 @@ bool PtyCaptureBackend::forwardPtyOutput(int masterFd, ControlProtocolParser& pa
         return false;
     }
 
-    // Pass the PTY bytes through the control-protocol parser. The parser will
-    // separate ordinary terminal output from private gptbridge control frames
+    // Pass the PTY bytes through the control-protocol parser. The parser separates
+    // ordinary terminal output from shell-integration control sequences
     parser.consume(
         std::string_view(
             buffer,                             // Bytes just read from the child PTY
@@ -510,7 +510,6 @@ PtyCaptureBackend::DescriptorCondition PtyCaptureBackend::checkDescriptorConditi
  * handleControlEvent()
  * Dispatches one decoded shell-integration event according to its semantic role.
  *
- * Complete legacy lifecycle events can be sent directly to CaptureCoordinator.
  * OSC metadata events are accumulated in OscCaptureState until OSC 133;C begins
  * an interaction. A private shell-presentation marker stops subsequent terminal
  * presentation bytes from being persisted, while OSC 133;D completes the active
@@ -531,40 +530,10 @@ void PtyCaptureBackend::handleControlEvent(
             //
             // decltype() gets the exact parameter type, which includes const and &.
             // std::decay_t removes those modifiers so only the underlying event
-            // type remains, e.g. CommandStartedEvent or CommandFinishedEvent.
+            // type remains, e.g. WorkingDirectoryEvent or ExactCommandEvent.
             using EventType = std::decay_t<decltype(concreteEvent)>;
 
-            // std::is_same_v compares two types at compile time.
-            // if constexpr compiles only the branch matching the current event type.
-            // For the CommandStartedEvent version of this generic lambda,
-            // if constexpr keeps only this branch during compilation.
-            if constexpr (std::is_same_v<EventType, CommandStartedEvent>) {
-                // JSON-based command-start events already contain every field
-                // required to begin the interaction
-                captureCoordinator.commandStarted(
-                    concreteEvent.interactionId,
-                    concreteEvent.command,
-                    concreteEvent.workingDirectory,
-                    concreteEvent.startedAt
-                );
-            }
-
-            // The other supported variant alternative represents command completion.
-            // For the CommandFinishedEvent version of this generic lambda,
-            // if constexpr keeps only this branch during compilation
-            // Runtime determines which variant alternative is currently stored
-            // Compile time determines which branch is valid for each possible event type
-            else if constexpr(std::is_same_v<EventType, CommandFinishedEvent>) {
-                // JSON-based completion events carry the matching interaction
-                // ID, exit status, and completion timestamp directly
-                captureCoordinator.commandFinished(
-                    concreteEvent.interactionId,
-                    concreteEvent.exitCode,
-                    concreteEvent.finishedAt
-                );
-            }
-
-            else if constexpr(std::is_same_v<EventType, WorkingDirectoryEvent>) {
+            if constexpr(std::is_same_v<EventType, WorkingDirectoryEvent>) {
                 // OSC 7 supplies the directory for the command whose execution
                 // metadata is currently being assembled
                 oscCaptureState.workingDirectory = concreteEvent.workingDirectory;
@@ -696,8 +665,8 @@ void PtyCaptureBackend::runSession() {
     // Match the child PTY's initial dimensions to the real terminal
     winsize terminalSize = getTerminalSize();
 
-    // Generate the per-session nonce used to distinguish legitimate gptbridge
-    // control frames from ordinary terminal output
+    // Generate the per-session nonce used to validate private gptbridge OSC
+    // metadata belonging to this capture session
     const std::string sessionNonce = generateSessionNonce();
 
     // Resolve the exact gptb executable before forkpty() so the child shell can
@@ -782,10 +751,10 @@ void PtyCaptureBackend::runSession() {
         };
 
     // Create the parser that will inspect PTY output for this session.
-    // The nonce identifies legitimate control frames, while the two handlers
+    // The nonce validates private gptbridge OSC metadata, while the two handlers
     // define what happens to ordinary output and decoded control events
     ControlProtocolParser parser(
-        sessionNonce,   // Control frames must contain this session's nonce
+        sessionNonce,   // Validates private gptbridge OSC metadata for this session
         outputHandler,  // Receives ordinary terminal output
         eventHandler    // Revceives decoded command lifecycle events
     );
@@ -854,7 +823,7 @@ void PtyCaptureBackend::runSession() {
             // Forward available child-PTY output to the real terminal
             if(!forwardPtyOutput(
                 masterDescriptor.get(), // PTY master to read child-shell output from
-                parser                  // Separates output from control frames
+                parser                  // Separates output from control sequences
             )) {
                 masterDescriptor.closeNow();
                 sessionRunning = false;

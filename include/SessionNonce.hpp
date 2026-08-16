@@ -6,12 +6,12 @@
 
 /**
  * generateSessionNonce()
- * Generates a fresh per-capture nonce/session token used to distinguish
- * legitimate gptbridge control frames from ordinary terminal output.
+ * Generates a fresh per-capture nonce used to distinguish legitimate
+ * gptbridge private OSC metadata from unrelated terminal output.
  *
- * The token is generated from cryptographically secure random bytes. The
- * randome bytes are encoded as lowercase hexadecimal text so the token
- * can be embedded safely in the text-oriented control protocol.
+ * The nonce is generated from cryptographically secure random bytes. The
+ * random bytes are encoded as lowercase hexadecimal text so the value can
+ * be embedded safely in gptbridge's private OSC sequences.
  */
 std::string generateSessionNonce();
 

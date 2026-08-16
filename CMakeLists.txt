@@ -38,7 +38,6 @@ add_executable(gptb
     src/CaptureCoordinator.cpp
     src/Config.cpp
     src/CommandLine.cpp
-    src/ControlFrameEncoder.cpp
     src/ControlProtocolParser.cpp
     src/ExecutablePath.cpp
     src/InteractionHistory.cpp

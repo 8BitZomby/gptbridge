@@ -12,8 +12,9 @@
 /**
  * ControlProtocolParser
  * Parses the PTY byte stream, separating ordinary terminal output from
- * gptbridge control frames. Valid control frames are decoded into ControlEvent
- * objects, while non-control bytes are passed through unchanged.
+ * shell-integration control sequences. Relevant OSC sequences are decoded into
+ * ControlEvent objects, while ordinary and unrelated terminal bytes are
+ * passed through unchanged
  */
 class ControlProtocolParser {
     public:
@@ -34,20 +35,20 @@ class ControlProtocolParser {
 
         /**
          * ControlProtocolParser()
-         * Creates a parser for one capture session using the nonce/
-         * session token that legitimate control frames must contain.
+         * Creates a parser for one capture session using the nonce required to
+         * validate gptbridge's private OSC metadata
          */
         ControlProtocolParser(std::string sessionNonce, OutputHandler outputHandler, EventHandler eventHandler);
 
         /**
          * consume()
-         * Processes the next chunk of PTY bytes. The parser preserves any
-         * incomplete control-frame data internally until more bytes arrive.
+         * Processes the next chunk of PTY bytes. The parser preserves incomplete
+         * OSC sequence data internally until more bytes arrive.
          */
         void consume(std::string_view bytes);
 
     private:
-        // Nonce/session token required for control frames in this capture
+        // Nonce required to validate private gptbridge OSC metadata for this capture
         std::string sessionNonce;
         // Receives ordinary terminal bytes
         OutputHandler outputHandler;
@@ -57,7 +58,7 @@ class ControlProtocolParser {
         /**
          * OscParseResult
          * Describes whether an OSC sequence beginning at the start of
-         * pendingBytes was comlpletely processed or requires additional bytes
+         * pendingBytes was completely processed or requires additional bytes
          */
         enum class OscParseResult {
             Consumed,   // A complete OSC sequence was classified and removed
@@ -73,11 +74,11 @@ class ControlProtocolParser {
         OscParseResult tryParseOscSequence();
 
         /**
-         * parserOsc7()
+         * parseOsc7()
          * Decodes the working-directory file URI carried by an OSC 7 sequence
          * and delivers the resulting WorkingDirectoryEvent
          */
-        void parserOsc7(std::string_view sequence);
+        void parseOsc7(std::string_view sequence);
 
         /**
          * parseExactCommand()
@@ -132,45 +133,13 @@ class ControlProtocolParser {
         std::size_t partialOscIntroducerLength() const;
 
         /**
-         * FrameParseResult
-         * Describes what happened when pendingBytes was examined for a control
-         * frame beginning at its first byte
-         */
-        enum class FrameParseResult {
-            Consumed,       // A complete valid control fram was parsed and removed
-            Incomplete,     // The candidate may be valid, but more PTY bytes are needed
-            NotControlFrame // The bytes do not belong to this capture session
-        };
-
-        /**
-         * tryParseFrame()
-         * Examines a control-frame candidate beginning at the start of pendingBytes.
-         * The result distinguishes a complete frame, and incomplete frame, and bytes
-         * that only resemble the protocol prefix but are not valid for this session
-         */
-        FrameParseResult tryParseFrame();
-
-        /**
-         * parsePayloadLength()
-         * Converts and validates the payload-length field from a control header
-         */
-        std::size_t parsePayloadLength(std::size_t lengthStart, std::size_t lengthEnd) const;
-
-        /**
         * emitOutput()
         * Sends terminal bytes to the configured output handler and identifies whether
         * those bytes are eligible to be persisted as command output.
         */
         void emitOutput(std::string_view bytes, bool captureEligible = true);
 
-        /**
-         * parseFrame()
-         * Attempts to decode one complete gptbridge control-frame payload and
-         * deliver the resulting semantic event to the configured event handler.
-         */
-        void parseFrame(std::string_view payload);
-
-        // Holds bytes that cannot yet be classified because a control frame
+        // Holds bytes that cannot yet be classified because an OSC sequence
         // may be split across multiple PTY reads
         std::string pendingBytes;
 };

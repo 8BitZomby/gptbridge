@@ -14,8 +14,8 @@
  * resulting 16 bytes into a 32-character lowercase hex session token.
  */
 std::string generateSessionNonce() {
-    // 16 random bytes provides 128 bits of randomness, making accidental reproduction
-    // of the session token effectively negligible for control-frame identification
+    // 16 random bytes provides 128 bits of randomness, making accidental reuse
+    // of the nonce effectively negligible across capture sessions
     std::array<unsigned char, 16> randomBytes{};
 
     // Asks macOS for cryptographically secure random bytes using the OS's secure
@@ -26,8 +26,8 @@ std::string generateSessionNonce() {
         throw std::runtime_error("Failed to generate session nonce");
     }
 
-    // Convert each binary byte into two hex characters. Hex encoding keeps the token
-    // printable and safe to embed inside the control-frame header without delimeter bytes
+    // Convert each binary byte into two hex characters. Hex encoding keeps the nonce
+    // printable and safe to embed inside gptbridge's private OSC metadata
 
     // Create lookup table
     constexpr char hexDigits[] = "0123456789abcdef";

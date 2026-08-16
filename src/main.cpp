@@ -1,6 +1,5 @@
 #include "CommandLine.hpp"
 #include "Config.hpp"
-#include "ControlFrameEncoder.hpp"
 #include "InteractionHistory.hpp"
 #include "ProjectManager.hpp"
 #include "PtyCaptureBackend.hpp"
@@ -155,128 +154,19 @@ int main(int argc, char* argv[]) {
                  * the captured PTY stream.
                  *
                  * Supported event types:
-                 *   started        - Encodes a JSON-based command-start control frame
-                 *   finished       - Encodes a JSON-based command-finished control frame
-                 *   osc-started    - Encodes OSC working-directory, exact-command, and
-                 *                    command-output-start metadata
-                 *  osc-finished    - Encodes an OSC command-completion marker
+                 *   osc-started            - Encodes OSC working-directory, exact-command, and
+                 *                            command-output-start metadata
+                 *   osc-presentation-start - Encodes the private presentation boundary
+                 *   osc-finished           - Encodes an OSC command-completion marker
                  */
                 if(argc < 3) {
                     std::cerr << "Usage: gptb shell-event "
-                            << "<started|finished|osc-started|osc-presentation-start|osc-finished> ...\n";
+                            << "<osc-started|osc-presentation-start|osc-finished> ...\n";
                     return 1;
                 }
 
                 // argv[2] identifies which shell lifecycle event should be encoded
                 const std::string eventType = argv[2];
-
-                // ----####---- EVENT STARTED ----####---- //
-                if(eventType == "started") {
-                    // A command-start event requires its interaction ID, exact command text,
-                    // and the directory in which the shell will execute the command
-                    if(argc != 6) {
-                        std::cerr << "Usage: gptb shell-event started "
-                                << "<interaction-id> <command> <working-directory>\n";
-                        return 1;
-                    }
-
-                    // Construct the structured event that describes the command beginning.
-                    // The timestamp is recorded when the shell reports the lifecycle event
-                    CommandStartedEvent event{
-                        .interactionId = argv[3],
-                        .command = argv[4],
-                        .workingDirectory = argv[5],
-                        .startedAt = currentTimestampUtc()
-                    };
-
-                    // The frame must contain the nonce assigned to this capture session so
-                    // ControlProtocolParser can reject frames from another session
-                    const char* sessionNonce = std::getenv("GPTB_SESSION_NONCE");
-                    if(sessionNonce == nullptr || *sessionNonce == '\0') {
-                        std::cerr << "gptb: GPTB_SESSION_NONCE is not set\n";
-                        return 1;
-                    }
-
-                    // Encode the structured command-start event into the framed byte format
-                    // recognized by ControlProtocoParser
-                    const std::string frame =
-                        ControlFrameEncoder::encode(
-                            event,          // Structured command-start metadata
-                            sessionNonce    // Nonce belonging to this capture session
-                    );
-
-                    // Write the frame into the captured PTY stream. The parser recognizes
-                    // and removes the control sequence before ordinary output is displayed
-                    std::cout << frame;
-                    std::cout.flush();
-
-                    return 0;
-                }
-
-                // ----####---- EVENT FINISHED ----####---- //
-                if(eventType == "finished") {
-                    // A command-finished event requires the matching interaction ID and the
-                    // exit status produced by the completed command
-                    if(argc != 5) {
-                        std::cerr << "Usage: gptb shell-event finished "
-                                << "<interaction-id> <exit-code>\n";
-                        return 1;
-                    }
-
-                    // Convert the exit-code argument from text into an integer
-                    int exitCode = 0;
-
-                    try {
-                        // std::stoi() reports the index immediately after the parsed integer.
-                        // Requiring that index to reach the end rejects values such as "12junk".
-                        std::size_t parsedLength = 0;
-                        const std::string exitCodeText = argv[4];
-
-                        exitCode = std::stoi(
-                                exitCodeText,       // Text supplied by the shell
-                                &parsedLength);     // Receives the number of character parsed
-
-                        if(parsedLength != exitCodeText.size()) {
-                            std::cerr << "gptb: invalid shell-event exit code\n";
-                            return 1;
-                        }
-                    }
-                    catch(const std::exception&) {
-                        std::cerr << "gptb: invalid shell-event exit code\n";
-                        return 1;
-                    }
-
-                    // Construct the structured event representing completion of the active
-                    // command. The timestamp records when its finish event was reported
-                    CommandFinishedEvent event{
-                        .interactionId = argv[3],
-                        .exitCode = exitCode,
-                        .finishedAt = currentTimestampUtc()
-                    };
-
-                    // Command-completion metadata must carry the same session nonce as the
-                    // corresponding command-start metadata
-                    const char* sessionNonce = std::getenv("GPTB_SESSION_NONCE");
-
-                    if(sessionNonce == nullptr || *sessionNonce == '\0') {
-                        std::cerr << "gptb: GPTB_SESSION_NONCE is not set\n";
-                        return 1;
-                    }
-
-                    // Encode the structured command-finish event into the framed byte format
-                    // recognized by ControlProtocolParser
-                    const std::string frame =
-                        ControlFrameEncoder::encode(
-                            event,              // Structured command-completion metadata
-                            sessionNonce);      // Nonce belonging to this capture session
-
-                    // Write the completion frame into the same PTY stream that carries
-                    // command output so lifecycle metadata remains ordered with that output
-                    std::cout << frame;
-                    std::cout.flush();
-
-                    return 0;
-                }
 
                 // OSC Shell-Integration Events
                 // ----####---- osc-started ----####---- //
