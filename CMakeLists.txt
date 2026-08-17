@@ -43,10 +43,14 @@ add_executable(gptb
     src/ControlProtocolParser.cpp
     src/ExecutablePath.cpp
     src/InteractionHistory.cpp
+    src/ListCommands.cpp
     src/main.cpp
     src/ProjectManager.cpp
     src/PtyCaptureBackend.cpp
+    src/ProjectCommands.cpp
     src/Storage.cpp
+    src/SessionCommands.cpp
+    src/ShellCommands.cpp
     src/ShellIntegration.cpp
     src/ShellIntegrationEncoder.cpp
     src/SessionManager.cpp
