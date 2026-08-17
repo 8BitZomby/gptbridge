@@ -10,6 +10,61 @@
 #include <vector>
 
 
+namespace {
+    /**
+     * parsePositiveCount()
+     * Parses a CLI count argument and requires a positive integer
+     */
+    bool parsePositiveCount(const std::string& text, std::size_t& value) {
+        try {
+            // Tracks how much of the argument stoull() successfully parsed
+            std::size_t parsedLength = 0;
+            value = std::stoull(text, &parsedLength);
+
+            // Reject partial values such as "2abc" and counts of zero
+            return parsedLength == text.size() && value > 0;
+        }
+        catch(const std::exception&) {
+            // Non-numeric or out-of-range values are invalid counts
+            return false;
+        }
+    }
+
+
+    /**
+     * selectRecentInteractions()
+     * Selects the newest interactions while preserving their execution order
+     */
+    std::vector<TerminalInteraction> selectRecentInteractions(const std::vector<TerminalInteraction>& history, std::size_t count) {
+        // Move backwards from the end to find the first requested interaction
+        const auto firstInteraction = history.end() - static_cast<std::ptrdiff_t>(count);
+
+        // Copy the selected tail of the history into a new vector
+        return std::vector<TerminalInteraction>(
+            firstInteraction,
+            history.end()
+        );
+    }
+
+
+    /**
+     * printInteraction()
+     * Prints one stored terminal interaction with its display number
+     */
+    void printInteraction(const TerminalInteraction& interaction, std::size_t displayIndex) {
+        // Show the interaction number and original command
+        std::cout << "[" << displayIndex << "] " << interaction.command << '\n';
+
+        // Print captured output directly below the command when present
+        if(!interaction.output.empty()) {
+            std::cout << interaction.output;
+        }
+
+        // Separate this interaction from the next one
+        std::cout << '\n';
+    }
+}
+
 /**
  * handlePushCommand()
  * Pushes one or more recent terminal interactions from the temporary
@@ -28,29 +83,16 @@ int handlePushCommand(int argc, char* argv[]) {
     const char* captureId = std::getenv("GPTB_SESSION_NONCE");
 
     if(captureId == nullptr || *captureId == '\0') {
-        std::cout << "gptb push requires an active gptbridge terminal session";
+        std::cout << "gptb push requires an active gptbridge terminal session\n";
         return 1;
     }
 
     // With no count supplied, push only the most recent interaction
     std::size_t pushCount = 1;
 
+    // Validate the optional count before reading the temporary history
     if(argc == 3) {
-        try {
-            // Require the entire argument to contain a positive integer
-            std::size_t parsedLength = 0;
-            const std::string countText = argv[2];
-            pushCount = std::stoull(
-                countText,
-                &parsedLength
-            );
-
-            if(parsedLength != countText.size() || pushCount == 0) {
-                std::cout << "Push count must be a positive integer\n";
-                return 1;
-            }
-        }
-        catch(const std::exception&) {
+        if(!parsePositiveCount(argv[2], pushCount)) {
             std::cout << "Push count must be a positive integer\n";
             return 1;
         }
@@ -77,13 +119,8 @@ int handlePushCommand(int argc, char* argv[]) {
         return 1;
     }
 
-    // Copy the requested number of interactions from the end of the
-    // temporary history while preserving their original execution order
-    const auto firstInteraction = history.end() - static_cast<std::ptrdiff_t>(pushCount);
-    const std::vector<TerminalInteraction> selectedInteractions(
-        firstInteraction,
-        history.end()
-    );
+    // Select the requested number of recent interactions
+    const std::vector<TerminalInteraction> selectedInteractions = selectRecentInteractions(history, pushCount);
 
     // Persist the selected terminal I/O as ChatGPT terminal context
     // Append/replace policy will be configurable separately
@@ -116,7 +153,7 @@ int handleShowCommand(int argc, char* argv[]) {
     TerminalContext terminalContext;
     const std::vector<TerminalInteraction> interactions = terminalContext.loadAll();
 
-    // An empty context means notheing has been pushed yet
+    // An empty context means nothing has been pushed yet
     if(interactions.empty()) {
         std::cout << "No terminal context\n";
         return 0;
@@ -124,19 +161,8 @@ int handleShowCommand(int argc, char* argv[]) {
 
     // Display each stored interaction in the order it was pushed
     for(std::size_t idx = 0; idx < interactions.size(); ++idx) {
-        const TerminalInteraction& interaction = interactions[idx];
-
-        // Number interactions from 1 so the same number can later be used
-        // by remove/select commands
-        std::cout << "[" << (idx + 1) << "] " << interaction.command << '\n';
-
-        // Show the captured output directly beneath its command
-        if(!interaction.output.empty()) {
-            std::cout << interaction.output;
-        }
-
-        // Keep consecutive interactions visually separated
-        std::cout << '\n';
+        // Display numbers start at 1 so they can later be used by remove/select commands
+        printInteraction(interactions[idx], idx + 1);
     }
 
     return 0;
@@ -149,7 +175,7 @@ int handleShowCommand(int argc, char* argv[]) {
  * context-management semantics are completed
  */
 int handleClearCommand(int argc, char* argv[]) {
-    // Preserve the current unimplemented behavious during this refactor
+    // Preserve the current unimplemented behaviour during this refactor
     std::cout << "Command recognized but not implemented yet\n";
     return 0;
 }
