@@ -149,3 +149,62 @@ int handleUseProjectCommand(int argc, char* argv[]) {
 
     return 0;
 }
+
+
+/**
+ * handleRestoreCommand()
+ * Re-enters a managed shell using the current or explicitly selected project
+ */
+int handleRestoreCommand(int argc, char* argv[]) {
+    // "gptb restore" uses the current session's saved active project.
+    // "gptb restore <project>" selects a registered project before restoring.
+    if(argc != 2 && argc != 3) {
+        std::cout << "Usage: gptb restore [project]\n";
+        return 1;
+    }
+
+    // Restore must be started from the user's normal shell. Starting another
+    // managed shell inside an existing one would create a nested PTY session.
+    const char* sessionNonce = std::getenv("GPTB_SESSION_NONCE");
+
+    if(sessionNonce != nullptr && *sessionNonce != '\0') {
+        std::cout << "Already inside a gptbridge managed shell\n";
+        return 1;
+    }
+
+    std::string projectName;
+
+    if(argc == 3) {
+        // An explicitly named project must already exist in the registry
+        projectName = argv[2];
+
+        if(!projectExists(projectName)) {
+            std::cout << "Project not found: " << projectName << '\n';
+            return 1;
+        }
+
+        // Make the requested project active for this terminal session
+        setActiveProject(projectName);
+    }
+    else {
+        // Without a project arguement, restore the project already saved for
+        // this terminal session
+        projectName = getActiveProject();
+
+        if(projectName.empty()) {
+            std::cout << "No project to restore for this session\n";
+            return 1;
+        }
+
+        // Session state can outlive a project registry entry, so verify that
+        // the saved project is still registered before entering the shell
+        if(!projectExists(projectName)) {
+            std::cout << "Saved project is no longer registered: " << projectName << '\n';
+            return 1;
+        }
+    }
+
+    std::cout << "Restoring project: " << projectName << '\n';
+
+    return runManagedShell();
+}

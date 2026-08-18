@@ -13,6 +13,7 @@ enum class Command {
     McpServer,
     Push,
     Remove,
+    Restore,
     Session,
     ShellInit,
     ShellEvent,
