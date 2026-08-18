@@ -18,6 +18,21 @@
 [[ -n "${GPTB_EXECUTABLE:-}" ]] || return
 
 
+# Wrap gptb commands inside the managed shell so session-lifecycle commands can
+# affect the shell itself while all other commands still invoke the read binary
+gptb() {
+    # "gptb exit" must terminate this managed zsh process itself. A normal gptb
+    # subprocess cannot exit its parent shell, so use zsh's builtin directly
+    if [[ "$1" == "exit" && "$#" -eq 1 ]]; then
+        builtin exit
+    fi
+
+    # Forward every other invocation to the exact executable that launched this
+    # managed session instead of relying on PATH lookup
+    "$GPTB_EXECUTABLE" "$@"
+}
+
+
 # Load zsh's hook-registration helper so gptbridge can install lifecycle hooks
 # without replacing hooks registered by other shell integrations.
 autoload -Uz add-zsh-hook
