@@ -33,6 +33,7 @@ int main(int argc, char* argv[]) {
             case Command::McpServer: return handleMcpServerCommand(argc, argv);
             case Command::Push: return handlePushCommand(argc, argv);
             case Command::Remove: return handleRemoveCommand(argc, argv);
+            case Command::Restore: return handleRestoreCommand(argc, argv);
             case Command::Session: return handleSessionCommand(argc, argv);
             case Command::ShellEvent: return handleShellEventCommand(argc, argv);
             case Command::ShellInit: return handleShellInitCommand(argc, argv);

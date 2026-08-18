@@ -14,6 +14,7 @@ Command parseCommand(const std::string& command) {
     if(command == "mcp-server") { return Command::McpServer; }
     if(command == "push") { return Command::Push; }
     if(command == "remove") { return Command::Remove; }
+    if(command == "restore") { return Command::Restore; }
     if(command == "session") { return Command::Session; }
     if(command == "shell-init") { return Command::ShellInit; }
     if(command == "shell-event") { return Command::ShellEvent; }
