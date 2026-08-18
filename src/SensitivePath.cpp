@@ -10,7 +10,7 @@ namespace {
     // Exact filenames that are almost always secrets or credentials, regardless
     // of where they appear
     constexpr std::array<std::string_view, 20> sensitiveExactNames = {
-        ".DS_Store",            // mocOs filesystem metadata
+        ".DS_Store",            // macOs filesystem metadata
         ".envrc",               // direnv contig that may export secrets
         ".gitattributes",       // Git path attributes and repo behaviour config
         ".git-credentials",     // Git credential-store contents
@@ -38,7 +38,7 @@ namespace {
         ".aws",                 // AWS credentials/config
         ".docker",              // Docker registry credentials
         ".git",                 // Git metadata and local metadata
-        ".githib",              // Git workflows and repo config
+        ".github",              // Git workflows and repo config
         ".gnupg",               // GPG private keys
         ".hg",                  // Mercurial repo metadata
         ".kube",                // Kubernetes config creds

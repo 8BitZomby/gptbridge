@@ -48,6 +48,7 @@ add_executable(gptb
     src/McpCommands.cpp
     src/McpServer.cpp
     src/ProjectManager.cpp
+    src/ProjectVisibility.cpp
     src/PtyCaptureBackend.cpp
     src/ProjectCommands.cpp
     src/Storage.cpp
