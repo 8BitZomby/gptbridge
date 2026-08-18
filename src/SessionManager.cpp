@@ -151,15 +151,21 @@ std::filesystem::path getCurrentSessionDirectory() {
  * Returns the state.json file stored inside the current session directory
  */
 std::filesystem::path getCurrentSessionPath() {
-    // Keep the session directory as the single source of thruth for where
+    // Keep the session directory as the single source of truth for where
     // all files belonging to the current session are stored
-    const std::filesystem::path sessionsDir = getCurrentSessionDirectory();
+    const std::filesystem::path sessionDirectory = getCurrentSessionDirectory();
 
-    // Create the sessions directory before it is written
-    std::filesystem::create_directories(sessionsDir);
+    // Per-terminal sessions live beneath a shared sessions directory, which must
+    // also remain private so other users cannot enumerate saved session IDs
+    if(getSessionMode() == SessionMode::PerTerminal) {
+        ensurePrivateDirectory(getStorageRoot() / "sessions");
+    }
+
+    // Ensure the persistent session directory exists with owner-only permissions
+    ensurePrivateDirectory(sessionDirectory);
 
     // Store session state in a fixed file inside the session directory
-    return sessionsDir / "state.json";
+    return sessionDirectory / "state.json";
 }
 
 
@@ -260,6 +266,9 @@ void setActiveProject(const std::string& projectName) {
 
     // Record which registered project is active for this session
     session["active_project"] = projectName;
+
+    // Ensure the session state file exists with owner-only permissions
+    ensurePrivateFile(sessionPath);
 
     std::ofstream output(sessionPath);
 

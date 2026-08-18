@@ -27,10 +27,13 @@ std::filesystem::path getTerminalContextPathForSession(const std::string& sessio
     // reject unsafe identifiers before using the session ID in a filesystem path
     validateSessionId(sessionId);
 
-    // MCP and other non-terminal callers must be able to address a session explicitly
-    const std::filesystem::path sessionDirectory = getStorageRoot() / "sessions" / sessionId;
+    const std::filesystem::path sessionsDirectory = getStorageRoot() / "sessions";
+    // Keep the shared sessions directory private so saved session IDs
+    // cannot be enumerated by other local users
+    ensurePrivateDirectory(sessionsDirectory);
 
-    // Ensure the session directory exists and remains private to the current user
+    const std::filesystem::path sessionDirectory = sessionsDirectory / sessionId;
+    // Ensure the specific session directory is also owner only
     ensurePrivateDirectory(sessionDirectory);
 
     return sessionDirectory / "terminal-context.jsonl";

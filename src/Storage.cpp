@@ -142,6 +142,9 @@ bool removeProject(const std::string& name) {
 
     const std::filesystem::path registryPath = getStorageRoot() / "projects.json";
 
+    // Ensure the project registry exists with owner-only permissions
+    ensurePrivateFile(registryPath);
+
     // Rewrite the registry with the updated project set
     std::ofstream output(registryPath);
 
@@ -171,6 +174,9 @@ void saveProject(const std::string& name, const std::filesystem::path& path) {
 
     // Store paths as strings because JSON has no filesystem path type
     registry["projects"][name]["path"] = path.string();
+
+    // Ensure the project registry exists with owner-only permissions
+    ensurePrivateFile(registryPath);
 
     std::ofstream output(registryPath);
 
