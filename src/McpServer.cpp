@@ -1,5 +1,6 @@
 #include "McpServer.hpp"
 #include "ProjectManager.hpp"
+#include "ProjectVisibility.hpp"
 #include "SensitivePath.hpp"
 #include "SessionManager.hpp"
 #include "TerminalContext.hpp"
@@ -428,8 +429,8 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
             // Return path relative to the project root rather than absolute paths
             const std::filesystem::path relativePath = std::filesystem::relative(entryPath, projectPath);
 
-            // Do not expose files that match the shared sensitive-project policy
-            if(isSensitiveProjectPath(relativePath)) {
+            // Only expose files allowed by the shared project-visibility policy
+            if(!isProjectPathVisible(relativePath)) {
                 continue;
             }
 
@@ -532,8 +533,8 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
                 continue;
             }
 
-            // The same sensitive-path policy protexts listing, reading, and searching
-            if(isSensitiveProjectPath(relativePath)) {
+            // Search only files allowed by the shared project-visibility policy
+            if(!isProjectPathVisible(relativePath)) {
                 continue;
             }
 
@@ -650,10 +651,9 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
             return;
         }
 
-        // Sensitive project files must not be readable through MCP even
-        // when requested directly by path
-        if(isSensitiveProjectPath(relativePath)) {
-            std::cerr << "gptb MCP: requested project file is blocked by sensitive-path policy\n";
+        // Read only files allowed by the shared project-visibility policy
+        if(!isProjectPathVisible(relativePath)) {
+            std::cerr << "gptb MCP: requested project file is not visible to MCP\n";
             return;
         }
 
