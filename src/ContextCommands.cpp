@@ -204,12 +204,69 @@ int handleShowCommand(int argc, char* argv[]) {
 
 /**
  * handleClearCommand()
- * Clears terminal context. The final CLI behaviour will be implemented when
- * context-management semantics are completed
+ * Clears all persistent terminal context stored for the current session
  */
 int handleClearCommand(int argc, char* argv[]) {
-    // Preserve the current unimplemented behaviour during this refactor
-    std::cout << "Command recognized but not implemented yet\n";
+    // "gptb clear" removes all pushed terminal context
+    // "gptb clear <count> removes only the newest pushed interactions"
+    if(argc != 2 && argc != 3) {
+        std::cout << "Usage: gptb clear [count]\n";
+        return 1;
+    }
+
+    TerminalContext terminalContext;
+
+    // With no could supplied, remove all persistent pushed context
+    if(argc == 2) {
+        terminalContext.clear();
+        std::cout << "Cleared terminal context\n";
+        return 0;
+    }
+
+    std::size_t clearCount = 0;
+
+    // Reject zero, non-numeric, partial, or out-of-range count arguments
+    if(!parsePositiveCount(argv[2], clearCount)) {
+        std::cout << "Clear count must be a positive integer\n";
+        return 1;
+    }
+
+    // Load the currently pushed interactions before removing the newest ones
+    std::vector<TerminalInteraction> interactions = terminalContext.loadAll();
+
+    if(interactions.empty()) {
+        std::cout << "No terminal context to clear\n";
+        return 1;
+    }
+
+    // Do not silently remove fewer interactions than the user requested
+    if(clearCount > interactions.size()) {
+        std::cout << "Only " << interactions.size() << " terminal interaction";
+
+        if(interactions.size() != 1) {
+            std::cout << "s";
+        }
+        std::cout << " currently pushed\n";
+        return 1;
+    }
+
+    // Removing every stored interaction is equivalent to clearing the file
+    if(clearCount == interactions.size()) {
+        terminalContext.clear();
+    }
+    else {
+        // Remove the requested number of newest interactions while preserving
+        // the original execution order of everything that remains
+        interactions.resize(interactions.size() - clearCount);
+        terminalContext.replace(interactions);
+    }
+
+    std::cout << "Cleared " << clearCount << " terminal interaction";
+    if(clearCount != 1) {
+        std::cout << "s";
+    }
+    std::cout << '\n';
+
     return 0;
 }
 
