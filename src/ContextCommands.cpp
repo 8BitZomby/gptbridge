@@ -1,6 +1,7 @@
 #include "ContextCommands.hpp"
 #include "TerminalContext.hpp"
 #include "TemporaryInteractionHistory.hpp"
+#include "TerminalSecretDetector.hpp"
 
 #include <cstddef>
 #include <cstdlib>
@@ -121,6 +122,38 @@ int handlePushCommand(int argc, char* argv[]) {
 
     // Select the requested number of recent interactions
     const std::vector<TerminalInteraction> selectedInteractions = selectRecentInteractions(history, pushCount);
+
+    // Scan only the interactions selected for this push so unrelated terminal
+    // history cannot block or warn about content the user did not choose.
+    const std::vector<SecretFinding> secretFindings =
+        detectTerminalSecrets(selectedInteractions);
+
+    // Require explicit confirmation before persisting terminal content that
+    // contains possible secrets or credentials.
+    if(!secretFindings.empty()) {
+        std::cout << "Warning: possible sensitive terminal content detected:\n";
+
+        for(const SecretFinding& finding : secretFindings) {
+            std::cout << "  - "
+                      << finding.location
+                      << ": "
+                      << finding.reason
+                      << '\n';
+        }
+
+        // Default to cancellation so pressing Enter cannot accidentally share
+        // terminal content that was flagged as potentially sensitive.
+        std::cout << "Push anyway? [y/N]: ";
+
+        std::string response;
+        std::getline(std::cin, response);
+
+        // Only an explicit y/Y allows the push to continue.
+        if(response != "y" && response != "Y") {
+            std::cout << "Terminal context was not pushed\n";
+            return 1;
+        }
+    }
 
     // Persist the selected terminal I/O as ChatGPT terminal context
     // Append/replace policy will be configurable separately
