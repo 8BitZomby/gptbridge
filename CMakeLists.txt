@@ -62,6 +62,7 @@ add_executable(gptb
     src/TemporaryInteractionHistory.cpp
     src/TerminalContext.cpp
     src/TerminalInteractionJson.cpp
+    src/TerminalSecretDetector.cpp
     src/TimeUtils.cpp
 )
 
