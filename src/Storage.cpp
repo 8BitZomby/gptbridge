@@ -1,8 +1,61 @@
 #include "Storage.hpp"
 
 #include <cstdlib>
+#include <fcntl.h>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <sys/_types/_s_ifmt.h>
+#include <sys/fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+
+/**
+ * ensurePrivateDirectory()
+ * Creates a directory tree and enforces owner-only permissions
+ */
+void ensurePrivateDirectory(const std::filesystem::path &path) {
+    // Create any missing directories before applying the security policy
+    std::filesystem::create_directories(path);
+
+    // Restrict traversal, reading, and writing to the current user
+    std::filesystem::permissions(
+        path,
+        std::filesystem::perms::owner_all,
+        std::filesystem::perm_options::replace
+    );
+}
+
+
+/**
+ * ensurePrivateFile()
+ * Creates a file with owner-only permissions or repairs an existing file's permissions
+ */
+void ensurePrivateFile(const std::filesystem::path& path) {
+    // Open or create the file without truncating existing contents.
+    // A newly created file starts with mode 0600 before any higher-level stream opens it
+    const int fileDescriptor = ::open(
+            path.c_str(),
+            O_WRONLY | O_CREAT,
+            S_IRUSR | S_IWUSR
+    );
+
+    if(fileDescriptor == -1) {
+        throw std::runtime_error("Failed to create private file");
+    }
+
+    // Existing files may have weaker permissions from older gptbridge versions,
+    // so explicitly repair them to owner-read/write only
+    if(::fchmod(fileDescriptor, S_IRUSR | S_IWUSR) == -1) {
+        ::close(fileDescriptor);
+        throw std::runtime_error("Failed to secure private file");
+    }
+
+    if(::close(fileDescriptor) == -1) {
+        throw std::runtime_error("Failed to close private file");
+    }
+}
 
 
 /**
@@ -10,9 +63,8 @@
  * Creates the global storage directory if it does not already exist.
  */
 void ensureStorageRoot() {
-    // create_directories() creates missing parent directories and does
-    // nothing if the directory already exists.
-    std::filesystem::create_directories(getStorageRoot());
+    // Keep all persistent gptbridge state private to the current user
+    ensurePrivateDirectory(getStorageRoot());
 }
 
 

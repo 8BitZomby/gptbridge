@@ -3,6 +3,7 @@
 
 #include "TerminalInteraction.hpp"
 
+#include <string>
 #include <vector>
 
 
@@ -30,6 +31,12 @@ class TerminalContext {
          * Returns all terminal interactions currently stored as context
          */
         std::vector<TerminalInteraction> loadAll() const;
+
+        /**
+         * loadAllForSession()
+         * Returns all terminal interactions stored for a specific session
+         */
+        std::vector<TerminalInteraction> loadAllForSession(const std::string& sessionId);
 
         /**
          * clear()

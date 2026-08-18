@@ -17,6 +17,13 @@ struct SessionInfo {
 
 
 /**
+ * validateSessionId()
+ * Rejects session identifiers that are unsafe to use as filesystem path components
+ */
+void validateSessionId(const std::string& sessionId);
+
+
+/**
  * listSessions()
  * Returns information about all saved per-terminal sessions
  */
@@ -57,6 +64,13 @@ std::filesystem::path getCurrentSessionPath();
  * Saves the active project name for the current terminal session
  */
 void setActiveProject(const std::string& projectName);
+
+
+/**
+ * getActiveProjectForSession()
+ * Returns the active project stored for a specific per-terminal session
+ */
+std::string getActiveProjectForSession(const std::string& sessionId);
 
 
 #endif

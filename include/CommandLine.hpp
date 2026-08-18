@@ -10,6 +10,7 @@ enum class Command {
     Clear,
     Init,
     List,
+    McpServer,
     Push,
     Remove,
     Session,

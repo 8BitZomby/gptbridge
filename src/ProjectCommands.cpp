@@ -1,8 +1,10 @@
 #include "ProjectCommands.hpp"
 #include "ProjectManager.hpp"
 #include "SessionManager.hpp"
+#include "ShellCommands.hpp"
 #include "Storage.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -93,7 +95,16 @@ int handleInitProjectCommand(int argc, char* argv[]) {
     std::cout << "Initialized project: " << projectName << '\n';
     std::cout << "Project path: " << projectPath.string() << '\n';
 
-    return 0;
+    // A session nonce means this command is already running inside a
+    // managed shell
+    const char* sessionNonce = std::getenv("GPTB_SESSION_NONCE");
+
+    if(sessionNonce != nullptr && *sessionNonce != '\0') {
+        return 0;
+    }
+
+    // Outside a managed shell, initialization immediately enters one
+    return runManagedShell();
 }
 
 
