@@ -3,12 +3,46 @@
 #include "Storage.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <unistd.h>
+
+
+/**
+ * validateSessionId()
+ * Rejects session identifiers that are unsafe to use as filesystem path components
+ */
+void validateSessionId(const std::string& sessionId) {
+    // Session IDs must contain an actual name and must not be special path entries
+    if(sessionId.empty() || sessionId == "." || sessionId == "..") {
+        throw std::runtime_error("Invalid gptbridge session ID");
+    }
+
+    // Keep session IDs reasonably bounded before they are used in filesystem paths
+    if(sessionId.size() > 128) {
+        throw std::runtime_error("Invalid gptbridge session ID");
+    }
+
+    // Only permit characters that are safe inside one filesystem path component
+    const bool validCharacters = std::all_of(
+            sessionId.begin(),
+            sessionId.end(),
+            [](unsigned char character) {
+                return std::isalnum(character) ||
+                        character == '-' ||
+                        character == '_' ||
+                        character == '.';
+            }
+    );
+
+    if(!validCharacters) {
+        throw std::runtime_error("Invalid gptbridge session ID");
+    }
+}
 
 
 /**
@@ -63,6 +97,10 @@ std::string getCurrentSessionId() {
     const char* inheritedSessionId = std::getenv("GPTB_SESSION_ID");
 
     if(inheritedSessionId != nullptr && *inheritedSessionId != '\0') {
+        // Inherited session IDs originate from the environment, so validate
+        // them before they can be used as filesystem path components
+        validateSessionId(inheritedSessionId);
+
         return inheritedSessionId;
     }
 
@@ -83,6 +121,11 @@ std::string getCurrentSessionId() {
     if(slash != std::string::npos) {
         sessionId = sessionId.substr(slash + 1);
     }
+
+    // Keep one invariant: every session ID returned by this function is safe
+    // to use as a single filesystem path component
+    validateSessionId(sessionId);
+
     return sessionId;
 }
 
@@ -108,15 +151,21 @@ std::filesystem::path getCurrentSessionDirectory() {
  * Returns the state.json file stored inside the current session directory
  */
 std::filesystem::path getCurrentSessionPath() {
-    // Keep the session directory as the single source of thruth for where
+    // Keep the session directory as the single source of truth for where
     // all files belonging to the current session are stored
-    const std::filesystem::path sessionsDir = getCurrentSessionDirectory();
+    const std::filesystem::path sessionDirectory = getCurrentSessionDirectory();
 
-    // Create the sessions directory before it is written
-    std::filesystem::create_directories(sessionsDir);
+    // Per-terminal sessions live beneath a shared sessions directory, which must
+    // also remain private so other users cannot enumerate saved session IDs
+    if(getSessionMode() == SessionMode::PerTerminal) {
+        ensurePrivateDirectory(getStorageRoot() / "sessions");
+    }
+
+    // Ensure the persistent session directory exists with owner-only permissions
+    ensurePrivateDirectory(sessionDirectory);
 
     // Store session state in a fixed file inside the session directory
-    return sessionsDir / "state.json";
+    return sessionDirectory / "state.json";
 }
 
 
@@ -218,6 +267,9 @@ void setActiveProject(const std::string& projectName) {
     // Record which registered project is active for this session
     session["active_project"] = projectName;
 
+    // Ensure the session state file exists with owner-only permissions
+    ensurePrivateFile(sessionPath);
+
     std::ofstream output(sessionPath);
 
     // Make sure the updated session state can actually be written to disk
@@ -227,4 +279,48 @@ void setActiveProject(const std::string& projectName) {
 
     // Write formatted JSON so session files remain easy to inspect manually
     output << session.dump(4) << '\n';
+}
+
+
+/**
+ * getActiveProjectForSession()
+ * Returns the active project stored for a specific per-terminal session
+ */
+std::string getActiveProjectForSession(const std::string& sessionId) {
+
+    // Reject unsafe identifiers before using the session ID in a filesystem path
+    validateSessionId(sessionId);
+
+    // Build the state-file path directly from the supplied session ID
+    const std::filesystem::path sessionPath =
+        getStorageRoot() / "sessions" / sessionId / "state.json";
+
+    // A session with no saved state has no active project
+    if(!std::filesystem::exists(sessionPath)) {
+        return "";
+    }
+
+    // Open the saved session state for reading
+    std::ifstream input(sessionPath);
+
+    if(!input) {
+        throw std::runtime_error("Failed to open session file for reading");
+    }
+
+    nlohmann::json session;
+
+    try {
+        // Parse the saved JSON state for this specific session
+        input >> session;
+    }
+    catch(const nlohmann::json::parse_error&) {
+        throw std::runtime_error("Failed to parse session file");
+    }
+
+    // Older or incomplete session files may not contain an active project
+    if(!session.contains("active_project")) {
+        return "";
+    }
+
+    return session.at("active_project").get<std::string>();
 }

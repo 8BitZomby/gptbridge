@@ -1,5 +1,6 @@
 #include "InteractionHistory.hpp"
 #include "SessionManager.hpp"
+#include "Storage.hpp"
 #include "TerminalInteraction.hpp"
 
 #include <filesystem>
@@ -21,10 +22,15 @@ void InteractionHistory::append(const TerminalInteraction& interaction) {
     // History may be the first state written for a new session, so ensure the
     // session directory exists rather than depending on another component to
     // have created it previously.
-    std::filesystem::create_directories(sessionDirectory);
+
+    // Keep persistent session history private to the current user
+    ensurePrivateDirectory(sessionDirectory);
 
     // Store interaction history beside the other files belonging to the session
     const std::filesystem::path historyPath = sessionDirectory / "history.json";
+
+    // Ensure the persistent history file exists with owner-only permissions
+    ensurePrivateFile(historyPath);
 
     nlohmann::json history = nlohmann::json::array();
 

@@ -131,6 +131,19 @@ namespace {
 
 
 /**
+ * runManagedShell()
+ * Launches the PTY-backed gptbridge managed shell
+ */
+int runManagedShell() {
+    // The backend owns the managed PTY session until the user exits the shell
+    PtyCaptureBackend backend;
+    backend.run();
+
+    return 0;
+}
+
+
+/**
  * handleCaptureCommand()
  * Launches the temporary PTY-backed capture shell.
  */
@@ -140,10 +153,7 @@ int handleCaptureCommand(int argc, char* argv[]) {
         return 1;
     }
 
-    PtyCaptureBackend backend;
-    backend.run();
-
-    return 0;
+    return runManagedShell();
 }
 
 

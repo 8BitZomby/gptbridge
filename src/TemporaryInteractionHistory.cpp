@@ -1,4 +1,5 @@
 #include "SessionManager.hpp"
+#include "Storage.hpp"
 #include "TemporaryInteractionHistory.hpp"
 #include "TerminalInteraction.hpp"
 #include "TerminalInteractionJson.hpp"
@@ -21,11 +22,13 @@ TemporaryInteractionHistory::TemporaryInteractionHistory(const std::string& capt
         throw std::runtime_error("Cannot create temporary interaction history with empty capture ID");
     }
 
-    // Keep temporary history isolated by capture ID
-    const std::filesystem::path captureDirectory =
-        std::filesystem::temp_directory_path() / "gptbridge" / captureId;
+    // Keep temporary hptbridge state inside its own private directory
+    const std::filesystem::path temporaryRoot = std::filesystem::temp_directory_path() / "gptbridge";
+    ensurePrivateDirectory(temporaryRoot);
 
-    std::filesystem::create_directories(captureDirectory);
+    // Give each live capture its own private directory beneath the temporary root
+    std::filesystem::path captureDirectory = temporaryRoot / captureId;
+    ensurePrivateDirectory(captureDirectory);
 
     // Full terminal history for this live capture
     historyPath = captureDirectory / "history.jsonl";
@@ -37,6 +40,8 @@ TemporaryInteractionHistory::TemporaryInteractionHistory(const std::string& capt
  * Adds one completed interaction to this capture's temporary history
  */
 void TemporaryInteractionHistory::append(const TerminalInteraction& interaction) {
+    // Ensure the temporary history file exists with owner-only permissions
+    ensurePrivateFile(historyPath);
 
     // Open in append mode so previous interactions are preserved
     // without rereading or rewriting the entire history file

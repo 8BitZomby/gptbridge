@@ -107,7 +107,11 @@ void setSessionMode(SessionMode mode) {
     // Convert the enum into the single canonical string used in config.json
     config["session_mode"] = sessionModeToString(mode);
 
+    // Ensure the configuration file exists with owner-only permissions
+    ensurePrivateFile(configPath);
+
     std::ofstream output(configPath);
+
     if(!output) {
         throw std::runtime_error("Failed to open config.json for writing");
     }

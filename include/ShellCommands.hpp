@@ -3,6 +3,13 @@
 
 
 /**
+ * runManagedShell()
+ * Launches the PTY-backed gptbridge managed shell
+ */
+int runManagedShell();
+
+
+/**
  * Handles "gptb capture".
  */
 int handleCaptureCommand(int argc, char* argv[]);

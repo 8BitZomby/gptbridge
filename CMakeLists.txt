@@ -45,16 +45,19 @@ add_executable(gptb
     src/InteractionHistory.cpp
     src/ListCommands.cpp
     src/main.cpp
+    src/McpCommands.cpp
+    src/McpServer.cpp
     src/ProjectManager.cpp
     src/PtyCaptureBackend.cpp
     src/ProjectCommands.cpp
     src/Storage.cpp
     src/SessionCommands.cpp
+    src/SessionManager.cpp
+    src/SessionNonce.cpp
+    src/SensitivePath.cpp
     src/ShellCommands.cpp
     src/ShellIntegration.cpp
     src/ShellIntegrationEncoder.cpp
-    src/SessionManager.cpp
-    src/SessionNonce.cpp
     src/TemporaryInteractionHistory.cpp
     src/TerminalContext.cpp
     src/TerminalInteractionJson.cpp
