@@ -1,5 +1,4 @@
-#include "ContextPaths.hpp"
-#include "SessionManager.hpp"
+#include "PersistentSessionStorage.hpp"
 #include "Storage.hpp"
 #include "TerminalContext.hpp"
 #include "TerminalInteractionJson.hpp"
@@ -9,6 +8,14 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
+#include <utility>
+
+
+/**
+ * TerminalContext()
+ * Binds terminal context operations to one persistent session
+ */
+TerminalContext::TerminalContext(PersistentSessionStorage sessionStorage) : sessionStorage_(std::move(sessionStorage)) {}
 
 
 /**
@@ -23,7 +30,10 @@ void TerminalContext::append(const std::vector<TerminalInteraction>& interaction
     }
 
     // Resolve the persistent terminal-context file for the current session
-    const std::filesystem::path contextPath = getTerminalContextPath();
+    const std::filesystem::path contextPath = sessionStorage_.getTerminalContextPath();
+
+    // Ensure the session directory exists before creating its context file
+    sessionStorage_.ensureSessionDirectoryExists();
 
     // Ensure the context file exists with owner-only permissions before writing
     ensurePrivateFile(contextPath);
@@ -49,7 +59,10 @@ void TerminalContext::append(const std::vector<TerminalInteraction>& interaction
 void TerminalContext::replace(const std::vector<TerminalInteraction>& interactions) {
 
     // Resolve the persistent terminal-context file for the current session
-    const std::filesystem::path contextPath = getTerminalContextPath();
+    const std::filesystem::path contextPath = sessionStorage_.getTerminalContextPath();
+
+    // Ensure the session directory exists before creating its context file
+    sessionStorage_.ensureSessionDirectoryExists();
 
     // Ensure the context file exists with owner-only permissions before writing
     ensurePrivateFile(contextPath);
@@ -75,52 +88,9 @@ void TerminalContext::replace(const std::vector<TerminalInteraction>& interactio
 std::vector<TerminalInteraction> TerminalContext::loadAll() const {
 
     // Resolve the context file without duplicating path logic here
-    const std::filesystem::path contextPath = getTerminalContextPath();
+    const std::filesystem::path contextPath = sessionStorage_.getTerminalContextPath();
 
     // A missing context file means no terminal interactions have been pushed yet
-    if(!std::filesystem::exists(contextPath)) {
-        return {};
-    }
-
-    // Open the JSON Lines context file for reading
-    std::ifstream input(contextPath);
-
-    if(!input) {
-        throw std::runtime_error("Failed to open terminal context for reading");
-    }
-
-    std::vector<TerminalInteraction> interactions;
-    std::string line;
-
-    // Each non-empty line represents one complete TerminalInteraction
-    while(std::getline(input, line)) {
-        if(line.empty()) {
-            continue;
-        }
-
-        try {
-            // Parse one JSON record and rebuild the typed interaction
-            const nlohmann::json record = nlohmann::json::parse(line);
-            interactions.push_back(terminalInteractionFromJson(record));
-        }
-        catch(const nlohmann::json::parse_error&) {
-            throw std::runtime_error("Failed to parse terminal context");
-        }
-    }
-
-    return interactions;
-}
-
-
-/**
- * loadAllForSession()
- * Returns all terminal interactions stored for a specific session
- */
-std::vector<TerminalInteraction> TerminalContext::loadAllForSession(const std::string& sessionId) {
-    // Resolve the context file explicitly so non-terminal callers can target a session
-    const std::filesystem::path contextPath = getTerminalContextPathForSession(sessionId);
-
-    // A missing context file means this session has no pushed context yet
     if(!std::filesystem::exists(contextPath)) {
         return {};
     }
@@ -162,7 +132,7 @@ std::vector<TerminalInteraction> TerminalContext::loadAllForSession(const std::s
 void TerminalContext::clear() {
 
     // Resolve the persistent terminal-context file for this session
-    const std::filesystem::path contextPath = getTerminalContextPath();
+    const std::filesystem::path contextPath = sessionStorage_.getTerminalContextPath();
 
     // Delete the persistent context file if this session currently has one
     if(std::filesystem::exists(contextPath)) {

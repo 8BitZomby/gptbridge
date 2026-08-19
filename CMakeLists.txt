@@ -39,14 +39,13 @@ add_executable(gptb
     src/Config.cpp
     src/CommandLine.cpp
     src/ContextCommands.cpp
-    src/ContextPaths.cpp
     src/ControlProtocolParser.cpp
     src/ExecutablePath.cpp
-    src/InteractionHistory.cpp
     src/ListCommands.cpp
     src/main.cpp
     src/McpCommands.cpp
     src/McpServer.cpp
+    src/PersistentSessionStorage.cpp
     src/ProjectManager.cpp
     src/ProjectVisibility.cpp
     src/PtyCaptureBackend.cpp

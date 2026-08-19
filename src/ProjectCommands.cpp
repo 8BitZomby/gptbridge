@@ -90,7 +90,7 @@ int handleInitProjectCommand(int argc, char* argv[]) {
     saveProject(projectName, projectPath);
 
     // Make the newly initialized project active for this session.
-    setActiveProject(projectName);
+    setActiveProjectForCurrentSession(projectName);
 
     std::cout << "Initialized project: " << projectName << '\n';
     std::cout << "Project path: " << projectPath.string() << '\n';
@@ -143,7 +143,7 @@ int handleUseProjectCommand(int argc, char* argv[]) {
     }
 
     // Store the selected project in the current session state.
-    setActiveProject(projectName);
+    setActiveProjectForCurrentSession(projectName);
 
     std::cout << "Active project: " << projectName << '\n';
 
@@ -184,12 +184,12 @@ int handleRestoreCommand(int argc, char* argv[]) {
         }
 
         // Make the requested project active for this terminal session
-        setActiveProject(projectName);
+        setActiveProjectForCurrentSession(projectName);
     }
     else {
         // Without a project arguement, restore the project already saved for
         // this terminal session
-        projectName = getActiveProject();
+        projectName = getActiveProjectForCurrentSession();
 
         if(projectName.empty()) {
             std::cout << "No project to restore for this session\n";

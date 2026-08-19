@@ -70,7 +70,7 @@ int handleStatusCommand(int argc, char* argv[]) {
     }
 
     // Determine which project is currently selected for this session.
-    const std::string activeProject = getActiveProject();
+    const std::string activeProject = getActiveProjectForCurrentSession();
 
     if(activeProject.empty()) {
         std::cout << "Active project: none\n";

@@ -1,19 +1,29 @@
 #ifndef GPTB_TERMINAL_CONTEXT_HPP
 #define GPTB_TERMINAL_CONTEXT_HPP
 
+#include "PersistentSessionStorage.hpp"
 #include "TerminalInteraction.hpp"
 
-#include <string>
 #include <vector>
 
 
 /**
  * TerminalContext
  * Stores terminal interactions explicitly selected for ChatGPT context.
- * Unlike termporary capture history, this data persits beyond the live shell
+ * Unlike temporary capture history, this data persists beyond the live shell.
+ *
+ * Each TerminalContext is bound to one PersistentSessionStorage so all
+ * operations use the same Global or PerTerminal session resolution.
  */
 class TerminalContext {
     public:
+
+        /**
+         * TerminalContext()
+         * Binds terminal context operations to the supplied persistent session
+         */
+        explicit TerminalContext(PersistentSessionStorage sessionStorage);
+
         /**
          * append()
          * Adds selected terminal interactions while preserving existing context
@@ -33,16 +43,15 @@ class TerminalContext {
         std::vector<TerminalInteraction> loadAll() const;
 
         /**
-         * loadAllForSession()
-         * Returns all terminal interactions stored for a specific session
-         */
-        std::vector<TerminalInteraction> loadAllForSession(const std::string& sessionId);
-
-        /**
          * clear()
          * Removes all terminal I/O currently stored for ChatGPT context
          */
         void clear();
+
+    private:
+
+        // Persistent session whose terminal context file this object manages
+        PersistentSessionStorage sessionStorage_;
 };
 
 

@@ -1,4 +1,5 @@
 #include "ContextCommands.hpp"
+#include "PersistentSessionStorage.hpp"
 #include "TerminalContext.hpp"
 #include "TemporaryInteractionHistory.hpp"
 #include "TerminalSecretDetector.hpp"
@@ -157,7 +158,7 @@ int handlePushCommand(int argc, char* argv[]) {
 
     // Persist the selected terminal I/O as ChatGPT terminal context
     // Append/replace policy will be configurable separately
-    TerminalContext terminalContext;
+    TerminalContext terminalContext(PersistentSessionStorage::forCurrentSession());
     terminalContext.append(selectedInteractions);
 
     std::cout << "Pushed " << pushCount << " terminal interaction";
@@ -183,7 +184,7 @@ int handleShowCommand(int argc, char* argv[]) {
     }
 
     // Load the persistent terminal context for the current gptbridge session
-    TerminalContext terminalContext;
+    TerminalContext terminalContext(PersistentSessionStorage::forCurrentSession());
     const std::vector<TerminalInteraction> interactions = terminalContext.loadAll();
 
     // An empty context means nothing has been pushed yet
@@ -214,9 +215,9 @@ int handleClearCommand(int argc, char* argv[]) {
         return 1;
     }
 
-    TerminalContext terminalContext;
+    TerminalContext terminalContext(PersistentSessionStorage::forCurrentSession());
 
-    // With no could supplied, remove all persistent pushed context
+    // With no count supplied, remove all persistent pushed context
     if(argc == 2) {
         terminalContext.clear();
         std::cout << "Cleared terminal context\n";

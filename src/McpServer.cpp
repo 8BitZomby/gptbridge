@@ -1,4 +1,6 @@
 #include "McpServer.hpp"
+
+#include "PersistentSessionStorage.hpp"
 #include "ProjectManager.hpp"
 #include "ProjectVisibility.hpp"
 #include "SensitivePath.hpp"
@@ -11,9 +13,35 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
+
+
+namespace {
+    /**
+     * tryResolvePersistentSessionStorageForMcp()
+     * Resolves the persistent gptbridge session assigned to this MCP server.
+     *
+     * std::nullopt represents the expected failure case where the MCP process
+     * was started without a GPTB_MCP_SESSION_ID environment variable.
+     */
+    std::optional<PersistentSessionStorage> tryResolvePersistentSessionStorageForMcp() {
+        // MCP runs without a terminal of its own, so its logical session identity
+        // must be supplied explicitly by the process environment
+        const char* sessionId = std::getenv("GPTB_MCP_SESSION_ID");
+
+        if(sessionId == nullptr || *sessionId == '\0') {
+            std::cerr << "gptb MCP: GPTB_MCP_SESSION_ID is not set\n";
+            return std::nullopt;
+        }
+
+        // PersistentSessionStorage performs session ID validation and applies the
+        // configured Global or PerTerminal storage routing policy in one place
+        return PersistentSessionStorage::forExplicitSessionId(sessionId);
+    }
+}
 
 
 /**
@@ -255,16 +283,18 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
     // get_active_project takes no arguments and only reads current state
     if(toolName == "get_active_project") {
 
-        // MCP runs without a terminal, so use the session explicitly assigned to it
-        const char* sessionId = std::getenv("GPTB_MCP_SESSION_ID");
+        // Try to determine which persistent gptbridge session storage this MCP server should use
+        const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
 
-        if(sessionId == nullptr || *sessionId == '\0') {
-            std::cerr << "gptb MCP: GPTB_MCP_SESSION_ID is not set\n";
+        if(!sessionStorage.has_value()) {
             return;
         }
 
+        // The optional contains a PersistentSessionStorage object, so access it directly
+        const PersistentSessionStorage& persistentSessionStorage = sessionStorage.value();
+
         // Read the active project from the selected gptbridge session
-        const std::string activeProject = getActiveProjectForSession(sessionId);
+        const std::string activeProject = getActiveProject(persistentSessionStorage);
 
         std::string text;
 
@@ -308,17 +338,19 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
     // GET TERMINAL CONTEXT
     // get_terminal_context returns terminal interactions explicitly pushed for this session
     if(toolName == "get_terminal_context") {
-        // MCP runs without a terminal, so read the session explicitly assigned to it
-        const char* sessionId = std::getenv("GPTB_MCP_SESSION_ID");
+        // Try to determine which persistent gptbridge session storage this MCP server should use
+        const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
 
-        if(sessionId == nullptr || *sessionId == '\0') {
-            std::cerr << "gptb MCP: GPTB_MCP_SESSION_ID is not set\n";
+        if(!sessionStorage.has_value()) {
             return;
         }
 
+        // The optional contains a PersistentSessionStorage object, so access it directly
+        const PersistentSessionStorage& persistentSessionStorage = sessionStorage.value();
+
         // Load persistent terminal context from the session bound to this MCP server
-        TerminalContext terminalContext;
-        const std::vector<TerminalInteraction> interactions = terminalContext.loadAllForSession(sessionId);
+        TerminalContext terminalContext(persistentSessionStorage);
+        const std::vector<TerminalInteraction> interactions = terminalContext.loadAll();
 
         std::ostringstream text;
 
@@ -372,16 +404,18 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
     // LIST PROJECT FILES
     // list_project_files returns the files available in the active project
     if(toolName == "list_project_files") {
-        // MCP has no terminal of its own, so use the session assigned to the server
-        const char* sessionId = std::getenv("GPTB_MCP_SESSION_ID");
+        // Try to determine which persistent gptbridge session storage this MCP server should use
+        const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
 
-        if(sessionId == nullptr || *sessionId == '\0') {
-            std::cerr << "gptb MCP: GPTB_MCP_SESSION_ID is not set\n";
+        if(!sessionStorage.has_value()) {
             return;
         }
 
-        // Find the project selected by the session bound to this MCP server
-        const std::string activeProject = getActiveProjectForSession(sessionId);
+        // The optional contains a PersistentSessionStorage object, so access it directly
+        const PersistentSessionStorage& persistentSessionStorage = sessionStorage.value();
+
+        // Read the active project from the selected gptbridge session
+        const std::string activeProject = getActiveProject(persistentSessionStorage);
 
         if(activeProject.empty() || !projectExists(activeProject)) {
             std::cerr << "gptb MCP: no valid active project\n";
@@ -486,15 +520,18 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
             return;
         }
 
-        // MCP has no terminal, so search the project belonging to its bound session
-        const char* sessionId = std::getenv("GPTB_MCP_SESSION_ID");
+        // Try to determine which persistent gptbridge session storage this MCP server should use
+        const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
 
-        if(sessionId == nullptr || *sessionId == '\0') {
-            std::cerr << "gptb MCP: GPTB_MCP_SESSION_ID is not set\n";
+        if(!sessionStorage.has_value()) {
             return;
         }
 
-        const std::string activeProject = getActiveProjectForSession(sessionId);
+        // The optional contains a PersistentSessionStorage object, so access it directly
+        const PersistentSessionStorage& persistentSessionStorage = sessionStorage.value();
+
+        // Read the active project from the selected gptbridge session
+        const std::string activeProject = getActiveProject(persistentSessionStorage);
 
         if(activeProject.empty() || !projectExists(activeProject)) {
             std::cerr << "gptb MCP: no valid active project\n";
@@ -622,16 +659,18 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
             return;
         }
 
-        // MCP has no terminal, so use the session explicitly assigned to the server
-        const char* sessionId = std::getenv("GPTB_MCP_SESSION_ID");
+        // Try to determine which persistent gptbridge session storage this MCP server should use
+        const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
 
-        if(sessionId == nullptr || *sessionId == '\0') {
-            std::cerr << "gptb MCP: GPTB_MCP_SESSION_ID is not set\n";
+        if(!sessionStorage.has_value()) {
             return;
         }
 
-        // Resolve the project currently selected by the bound session
-        const std::string activeProject = getActiveProjectForSession(sessionId);
+        // The optional contains a PersistentSessionStorage object, so access it directly
+        const PersistentSessionStorage& persistentSessionStorage = sessionStorage.value();
+
+        // Read the active project from the selected gptbridge session
+        const std::string activeProject = getActiveProject(persistentSessionStorage);
 
         if(activeProject.empty() || !projectExists(activeProject)) {
             std::cerr << "gptb MCP: no valid active project\n";
