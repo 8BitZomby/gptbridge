@@ -9,7 +9,7 @@
 
 namespace {
     // Source-code extensions that are useful project context for MCP clients
-    constexpr std::array<std::string_view, 16> visibleExtensions = {
+    constexpr std::array<std::string_view, 17> visibleExtensions = {
         ".c",
         ".cc",
         ".cpp",
@@ -25,7 +25,15 @@ namespace {
         ".rs",
         ".sh",
         ".ts",
-        ".tsx"
+        ".tsx",
+        ".zsh"
+    };
+
+    // Source-template suffixes that preserve the underlying source file type
+    constexpr std::array<std::string_view, 3> visibleCompoundSuffixes = {
+        ".cpp.in",
+        ".h.in",
+        ".hpp.in"
     };
 
     // Exact project/build files that are useful even though they may not have
@@ -70,6 +78,20 @@ bool isProjectPathVisible(const std::filesystem::path& relativePath) {
     );
 
     if(matchesExactName) {
+        return true;
+    }
+
+    // Recognize generated-source templates by their full compound suffix
+    const bool matchesCompoundSuffix = std::any_of(
+            visibleCompoundSuffixes.begin(),
+            visibleCompoundSuffixes.end(),
+            [&filename](std::string_view suffix) {
+
+                return filename.ends_with(suffix);
+            }
+    );
+
+    if(matchesCompoundSuffix) {
         return true;
     }
 
