@@ -63,9 +63,9 @@ int McpServer::run() {
             handleMessage(message);
         }
         catch(const nlohmann::json::parse_error&) {
-            // Protocol errors must never be written to stdout because stdout
-            // is reserved exclusively for MCP JSON-RPC messages
-            std::cerr << "gptb MCP: invalid JSON received\n";
+            // Invalid JSON cannot provide a usable request ID, so JSON-RPC
+            // requires a parse-error response with a null ID
+            sendJsonRpcError(nullptr, -32700, "Parse error");
         }
     }
 
@@ -81,6 +81,9 @@ int McpServer::run() {
 void McpServer::handleMessage(const nlohmann::json& message) {
     // Requests without a method cannot be routed as MCP operations
     if(!message.contains("method") || !message["method"].is_string()) {
+        if(message.contains("id")) {
+            sendJsonRpcError(message["id"], -32600, "Invalid JSON-RPC request");
+        }
         return;
     }
 
@@ -109,6 +112,11 @@ void McpServer::handleMessage(const nlohmann::json& message) {
     if(method == "tools/call") {
         handleToolsCall(message);
         return;
+    }
+
+    // Unknown notifications require no response, but unknown requests do
+    if(message.contains("id")) {
+        sendJsonRpcError(message["id"], -32601, "Method not found: " + method);
     }
 }
 
@@ -273,6 +281,8 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         !message["params"].is_object() ||
         !message["params"].contains("name") ||
         !message["params"]["name"].is_string()) {
+
+            sendJsonRpcError(message["id"], -32602, "Invalid tools/call parameters");
             return;
         }
 
@@ -287,6 +297,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
 
         if(!sessionStorage.has_value()) {
+            sendToolError(message["id"], "MCP session storage could not be resolved");
             return;
         }
 
@@ -342,6 +353,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
 
         if(!sessionStorage.has_value()) {
+            sendToolError(message["id"], "MCP session storage could not be resolved");
             return;
         }
 
@@ -408,6 +420,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
 
         if(!sessionStorage.has_value()) {
+            sendToolError(message["id"], "MCP session storage could not be resolved");
             return;
         }
 
@@ -418,7 +431,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         const std::string activeProject = getActiveProject(persistentSessionStorage);
 
         if(activeProject.empty() || !projectExists(activeProject)) {
-            std::cerr << "gptb MCP: no valid active project\n";
+            sendToolError(message["id"], "No valid active gptbridge project");
             return;
         }
 
@@ -511,12 +524,14 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
            !message["params"]["arguments"].contains("query") ||
            !message["params"]["arguments"]["query"].is_string()) {
 
+            sendJsonRpcError(message["id"], -32602, "search_project_files requires a string query");
             return;
         }
 
         const std::string query = message["params"]["arguments"]["query"].get<std::string>();
 
         if(query.empty()) {
+            sendJsonRpcError(message["id"], -32602, "search_project_files query cannot be empty");
             return;
         }
 
@@ -524,6 +539,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
 
         if(!sessionStorage.has_value()) {
+            sendToolError(message["id"], "MCP session storage could not be resolved");
             return;
         }
 
@@ -534,7 +550,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         const std::string activeProject = getActiveProject(persistentSessionStorage);
 
         if(activeProject.empty() || !projectExists(activeProject)) {
-            std::cerr << "gptb MCP: no valid active project\n";
+            sendToolError(message["id"], "No valid active gptbridge project");
             return;
         }
 
@@ -649,6 +665,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
                 !message["params"]["arguments"].contains("path") ||
                 !message["params"]["arguments"]["path"].is_string()) {
 
+            sendJsonRpcError(message["id"], -32602, "read_project_file requires a string path");
             return;
         }
 
@@ -656,6 +673,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
 
         // Absolute paths are not allowed because reads must stay inside the project
         if(requestedPath.is_absolute()) {
+            sendToolError(message["id"], "Requested project path must be relative");
             return;
         }
 
@@ -663,6 +681,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
 
         if(!sessionStorage.has_value()) {
+            sendToolError(message["id"], "MCP session storage could not be resolved");
             return;
         }
 
@@ -673,7 +692,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         const std::string activeProject = getActiveProject(persistentSessionStorage);
 
         if(activeProject.empty() || !projectExists(activeProject)) {
-            std::cerr << "gptb MCP: no valid active project\n";
+            sendToolError(message["id"], "No valid active gptbridge project");
             return;
         }
 
@@ -687,24 +706,26 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
 
         // A path beginning with ".." escaped outside the active project
         if(relativePath.empty() || *relativePath.begin() == "..") {
+            sendToolError(message["id"], "Requested project path escapes the active project");
             return;
         }
 
         // Read only files allowed by the shared project-visibility policy
         if(!isProjectPathVisible(relativePath)) {
-            std::cerr << "gptb MCP: requested project file is not visible to MCP\n";
+            sendToolError(message["id"], "Requested project file is not visible to MCP");
             return;
         }
 
-        // Only existing regular files can be returned as prject content
+        // Only existing regular files can be returned as project content
         if(!std::filesystem::exists(filePath) || !std::filesystem::is_regular_file(filePath)) {
+            sendToolError(message["id"], "Requested project file does not exist or is not a regular file");
             return;
         }
 
         std::ifstream input(filePath);
 
         if(!input) {
-            std::cerr << "gptb MCP: failed to open project file\n";
+            sendToolError(message["id"], "Failed to open requested project file");
             return;
         }
 
@@ -736,5 +757,51 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         return;
     }
 
-    // We will add proper JSON-RPC/tool errors after the basic call path works
+    // Unknown tool error
+    sendJsonRpcError(message["id"], -32602, "Unknown MCP tool: " + toolName);
+}
+
+
+/**
+ * sendJsonRpcError()
+ * Sends a JSON-RPC error response for an invalid request
+ */
+void McpServer::sendJsonRpcError(const nlohmann::json& id, int code, const std::string& message) {
+    const nlohmann::json response = {
+        {"jsonrpc", "2.0"},
+        {"id", id},
+        {"error", {
+            {"code", code},
+            {"message", message}
+        }}
+    };
+
+    std::cout << response.dump() << '\n';
+    std::cout.flush();
+}
+
+
+/**
+ * sendToolError()
+ * Sends an MCP tool result indicating that valid tool execution failed
+ */
+void McpServer::sendToolError(const nlohmann::json& id, const std::string& message) {
+    const nlohmann::json result = {
+        {"content", nlohmann::json::array({
+            {
+                {"type", "text"},
+                {"text", message}
+            }
+        })},
+        {"isError", true}
+    };
+
+    const nlohmann::json response = {
+        {"jsonrpc", "2.0"},
+        {"id", id},
+        {"result", result}
+    };
+
+    std::cout << response.dump() << '\n';
+    std::cout.flush();
 }

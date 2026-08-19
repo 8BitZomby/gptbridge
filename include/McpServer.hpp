@@ -2,6 +2,7 @@
 #define GPTB_MCP_SERVER_HPP
 
 #include <nlohmann/json.hpp>
+#include <string>
 
 
 /**
@@ -42,6 +43,18 @@ class McpServer {
          * Executes one read-only MCP tool requested by the client
          */
         void handleToolsCall(const nlohmann::json& message);
+
+        /**
+         * sendJsonRpcError()
+         * Sends a JSON-RPC error response for an invalid request
+         */
+        void sendJsonRpcError(const nlohmann::json& id, int code, const std::string& message);
+
+        /**
+         * sendToolError()
+         * Sends an MCP tool result indicating that valid tool execution failed
+         */
+        void sendToolError(const nlohmann::json& id, const std::string& message);
 };
 
 
