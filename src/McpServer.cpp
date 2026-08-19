@@ -33,13 +33,20 @@ namespace {
         const char* sessionId = std::getenv("GPTB_MCP_SESSION_ID");
 
         if(sessionId == nullptr || *sessionId == '\0') {
-            std::cerr << "gptb MCP: GPTB_MCP_SESSION_ID is not set\n";
             return std::nullopt;
         }
 
-        // PersistentSessionStorage performs session ID validation and applies the
-        // configured Global or PerTerminal storage routing policy in one place
-        return PersistentSessionStorage::forExplicitSessionId(sessionId);
+        try {
+            // PersistentSessionStorage performs session ID validation and applies the
+            // configured Global or PerTerminal storage routing policy in one place
+            return PersistentSessionStorage::forExplicitSessionId(sessionId);
+        }
+        catch(const std::exception& error) {
+            // Invalid MCP session configuration must fail this tool call rather
+            // than terminating the entire MCP server process
+            std::cerr << "gptb MCP: invalid session id: " << error.what() << '\n';
+            return std::nullopt;
+        }
     }
 }
 
