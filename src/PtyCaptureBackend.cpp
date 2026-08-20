@@ -2,6 +2,7 @@
 #include "CaptureCoordinator.hpp"
 #include "ControlProtocolParser.hpp"
 #include "ExecutablePath.hpp"
+#include "SessionManager.hpp"
 #include "SessionNonce.hpp"
 #include "TimeUtils.hpp"
 
@@ -237,7 +238,9 @@ void PtyCaptureBackend::updatePtyWindowSize(int masterFd) {
  *   - if execl() succeeds, the process image is replaced
  *   - if setup or execl() fails, we call _exit()
  */
-[[noreturn]] void PtyCaptureBackend::runChildShell(const std::string& sessionNonce, const std::filesystem::path& executablePath) {
+[[noreturn]] void PtyCaptureBackend::runChildShell(
+        const std::string& sessionNonce, const std::string& sessionId, const std::filesystem::path& executablePath) {
+
     // SHELL normall contains the path to the user's configured shell,
     // for example "/bin/zsh" on macOS
     const char* shell = std::getenv("SHELL");
@@ -246,6 +249,13 @@ void PtyCaptureBackend::updatePtyWindowSize(int masterFd) {
     // side hooks can include it in private gptbridge OSC metadata they emit
     // Pass c-style string. The 1 means overwrite any existing string
     if(setenv("GPTB_SESSION_NONCE", sessionNonce.c_str(), 1) == -1) {
+        _exit(1);
+    }
+
+    // Preserve the logical gptbridge session that launched this managed shell.
+    // forkpty() gives the child a different OS terminal, but gptbridge session
+    // state must continue to belong to the original terminal
+    if(setenv("GPTB_SESSION_ID", sessionId.c_str(), 1) == -1) {
         _exit(1);
     }
 
@@ -669,6 +679,10 @@ void PtyCaptureBackend::runSession() {
     // metadata belonging to this capture session
     const std::string sessionNonce = generateSessionNonce();
 
+    // Preserve the session identity of the terminal that launched this capture.
+    // The child receives a new PTY device, so it cannot derive this ID itself
+    const std::string sessionId = getCurrentSessionId();
+
     // Resolve the exact gptb executable before forkpty() so the child shell can
     // invoke the same binary for internal shell-event reporting without replying
     // on PATH lookup
@@ -697,7 +711,7 @@ void PtyCaptureBackend::runSession() {
 
     // A return value of 0 means this is the created child process
     if(childPid == 0) {
-        runChildShell(sessionNonce, executablePath);
+        runChildShell(sessionNonce, sessionId, executablePath);
     }
 
     // The parent owns the PTY master descriptor from this point onward.
@@ -706,7 +720,8 @@ void PtyCaptureBackend::runSession() {
 
     // Coordinates command-start, captured-output, and command-finish events
     // while the PTY session is running
-    CaptureCoordinator captureCoordinator;
+    // Use this capture's unique nonce to isolate its temporary terminal history
+    CaptureCoordinator captureCoordinator(sessionNonce);
 
     // Accumulates OSC command metadata and lifecycle state for this PTY session.
     // Keeping it local prevents command state from surviving across sessions

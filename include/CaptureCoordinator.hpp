@@ -1,7 +1,7 @@
 #ifndef GPTB_CAPTURE_COORDINATOR_HPP
 #define GPTB_CAPTURE_COORDINATOR_HPP
 
-#include "InteractionHistory.hpp"
+#include "TemporaryInteractionHistory.hpp"
 
 #include <filesystem>
 #include <optional>
@@ -17,6 +17,19 @@
  */
 class CaptureCoordinator {
     public:
+        /**
+         * Constructor: CaptureCoordinator()
+         * Creates a coordinator for one live capture and connects completed
+         * interactions to that capture's temporary history
+         */
+        CaptureCoordinator(const std::string& captureId);
+
+        /**
+         * Destructor: ~CaptureCoordinator()
+         * Removes temporary terminal history when this live capture ends
+         */
+        ~CaptureCoordinator();
+
         /**
          * commandStarted()
          * Begins a new command interaction using metadata reported by the
@@ -66,8 +79,9 @@ class CaptureCoordinator {
         // means the shell is presently between command executions
         std::optional<PendingInteraction> pendingInteraction;
 
-        // Provides persistent storage for completed terminal interactions
-        InteractionHistory history;
+        // Stores every completed interaction for this live capture so terminal
+        // I/O can later be selected with `gptb push`
+        TemporaryInteractionHistory history;
 };
 
 

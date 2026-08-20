@@ -18,6 +18,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Re-run CMake configuration when the embedded zsh integration changes so a
+# normal build always regenerates the C++ header with the latest script.
+set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/shell/gptbridge.zsh"
+)
+
 # Read the zsh integration script at configure time so it can be embedded
 # directly into the gptb executable without requiring the source file at runtime.
 file(
@@ -38,17 +47,30 @@ add_executable(gptb
     src/CaptureCoordinator.cpp
     src/Config.cpp
     src/CommandLine.cpp
+    src/ContextCommands.cpp
     src/ControlProtocolParser.cpp
     src/ExecutablePath.cpp
-    src/InteractionHistory.cpp
+    src/ListCommands.cpp
     src/main.cpp
+    src/McpCommands.cpp
+    src/McpServer.cpp
+    src/PersistentSessionStorage.cpp
     src/ProjectManager.cpp
+    src/ProjectVisibility.cpp
     src/PtyCaptureBackend.cpp
+    src/ProjectCommands.cpp
     src/Storage.cpp
-    src/ShellIntegration.cpp
-    src/ShellIntegrationEncoder.cpp
+    src/SessionCommands.cpp
     src/SessionManager.cpp
     src/SessionNonce.cpp
+    src/SensitivePath.cpp
+    src/ShellCommands.cpp
+    src/ShellIntegration.cpp
+    src/ShellIntegrationEncoder.cpp
+    src/TemporaryInteractionHistory.cpp
+    src/TerminalContext.cpp
+    src/TerminalInteractionJson.cpp
+    src/TerminalSecretDetector.cpp
     src/TimeUtils.cpp
 )
 

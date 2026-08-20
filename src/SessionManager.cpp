@@ -1,8 +1,11 @@
 #include "Config.hpp"
 #include "SessionManager.hpp"
+#include "PersistentSessionStorage.hpp"
 #include "Storage.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -11,15 +14,49 @@
 
 
 /**
+ * validateSessionId()
+ * Rejects session identifiers that are unsafe to use as filesystem path components
+ */
+void validateSessionId(const std::string& sessionId) {
+    // Session IDs must contain an actual name and must not be special path entries
+    if(sessionId.empty() || sessionId == "." || sessionId == "..") {
+        throw std::runtime_error("Invalid gptbridge session ID");
+    }
+
+    // Keep session IDs reasonably bounded before they are used in filesystem paths
+    if(sessionId.size() > 128) {
+        throw std::runtime_error("Invalid gptbridge session ID");
+    }
+
+    // Only permit characters that are safe inside one filesystem path component
+    const bool validCharacters = std::all_of(
+            sessionId.begin(),
+            sessionId.end(),
+            [](unsigned char character) {
+                return std::isalnum(character) ||
+                        character == '-' ||
+                        character == '_' ||
+                        character == '.';
+            }
+    );
+
+    if(!validCharacters) {
+        throw std::runtime_error("Invalid gptbridge session ID");
+    }
+}
+
+
+/**
  * getActiveProject()
- * Returns the active project for the current terminal.
+ * Returns the active project stored in the supplied persistent session.
  * An empty string means this session has no active project yet.
  */
-std::string getActiveProject() {
-    // Resolve the state file belonging to the current terminal
-    const std::filesystem::path sessionPath = getCurrentSessionPath();
+std::string getActiveProject(const PersistentSessionStorage& sessionStorage) {
+    // Resolve the session-state file through the shared persistent-storage
+    // abstraction rather than constructing a session path locally
+    const std::filesystem::path sessionPath = sessionStorage.getSessionStatePath();
 
-    // A session file does not exist until this terminal has stored state
+    // A session file with no saved state has no active project
     if(!std::filesystem::exists(sessionPath)) {
         return "";
     }
@@ -34,7 +71,7 @@ std::string getActiveProject() {
     nlohmann::json session;
 
     try {
-        // Parse the saved state for the current global/per-terminal session
+        // Parse the saved JSON state for this persistent session
         input >> session;
     }
     catch(const nlohmann::json::parse_error&) {
@@ -52,10 +89,33 @@ std::string getActiveProject() {
 
 
 /**
+ * getActiveProjectForCurrentSession()
+ * Returns the active project stored for the current logical gptbridge session
+ */
+std::string getActiveProjectForCurrentSession() {
+    // Resolve the current session once, then use the shared storage-aware reader
+    return getActiveProject(PersistentSessionStorage::forCurrentSession());
+}
+
+
+/**
  * getCurrentSessionId()
- * Returns an identifier for the terminal session that invoked gptb
+ * Returns the logical gptbridge session associated with the current terminal
  */
 std::string getCurrentSessionId() {
+
+    // A managed child shell inherits the session ID of the terminal that
+    // launched it, even though forkpty() assigns the child a new PTY device
+    const char* inheritedSessionId = std::getenv("GPTB_SESSION_ID");
+
+    if(inheritedSessionId != nullptr && *inheritedSessionId != '\0') {
+        // Inherited session IDs originate from the environment, so validate
+        // them before they can be used as filesystem path components
+        validateSessionId(inheritedSessionId);
+
+        return inheritedSessionId;
+    }
+
     // ttyname() returns the terminal device attached to standard input,
     // for example "/dev/ttys003" on macOS
     const char* terminal = ttyname(STDIN_FILENO);
@@ -73,40 +133,12 @@ std::string getCurrentSessionId() {
     if(slash != std::string::npos) {
         sessionId = sessionId.substr(slash + 1);
     }
+
+    // Keep one invariant: every session ID returned by this function is safe
+    // to use as a single filesystem path component
+    validateSessionId(sessionId);
+
     return sessionId;
-}
-
-
-/**
- * getCurrentSessionDirectory()
- * Returns the directory used to store data for the current session
- */
-std::filesystem::path getCurrentSessionDirectory() {
-    // Global mode keeps all shared session data in one dedicated directory
-    if(getSessionMode() == SessionMode::Global) {
-        return getStorageRoot() / "global-session";
-    }
-
-    // Per-terminal mode gives each terminal its own directory so all
-    // state belonging to that session can be stored together
-    return getStorageRoot() / "sessions" / getCurrentSessionId();
-}
-
-
-/**
- * getCurrentSessionPath()
- * Returns the state.json file stored inside the current session directory
- */
-std::filesystem::path getCurrentSessionPath() {
-    // Keep the session directory as the single source of thruth for where
-    // all files belonging to the current session are stored
-    const std::filesystem::path sessionsDir = getCurrentSessionDirectory();
-
-    // Create the sessions directory before it is written
-    std::filesystem::create_directories(sessionsDir);
-
-    // Store session state in a fixed file inside the session directory
-    return sessionsDir / "state.json";
 }
 
 
@@ -178,35 +210,41 @@ std::vector<SessionInfo> listSessions() {
 
 /**
  * setActiveProject()
- * Saves the active project name for the current terminal session
+ * Saves the active project in the supplied persistent session
  */
-void setActiveProject(const std::string& projectName) {
-    // Resolve the JSON file belonging to the terminal running this command
-    const std::filesystem::path sessionPath = getCurrentSessionPath();
+void setActiveProject(const PersistentSessionStorage& sessionStorage, const std::string& projectName) {
+    // Writing persistent state requires the resolved session directory to exist
+    // with the owner-only permissions enforced by PersistentSessionStorage
+    sessionStorage.ensureSessionDirectoryExists();
+
+    // Resolve state.json through the shared session-storage abstraction
+    const std::filesystem::path sessionPath = sessionStorage.getSessionStatePath();
 
     nlohmann::json session;
 
-    // Preserve any other session state if this terminal already has a file
+    // Preserve any other session state if this session already has a file
     if(std::filesystem::exists(sessionPath)) {
         std::ifstream input(sessionPath);
 
-        // An existing session file that cannot be opened indicates an I/O error
         if(!input) {
             throw std::runtime_error("Failed to open session file for reading");
         }
 
         try {
-            // Parse the existing session so unrelated session fields are preserved
+            // Preserve unrelated fields already stored in this session
             input >> session;
         }
         catch(const nlohmann::json::parse_error&) {
-            // Refuse to overwrite a malformed session file with new state
+            // Never overwrite malformed persistent state with partial new data
             throw std::runtime_error("Failed to parse session file");
         }
     }
 
     // Record which registered project is active for this session
     session["active_project"] = projectName;
+
+    // Create or repair the state file with owner-only permissions before writing
+    ensurePrivateFile(sessionPath);
 
     std::ofstream output(sessionPath);
 
@@ -217,4 +255,14 @@ void setActiveProject(const std::string& projectName) {
 
     // Write formatted JSON so session files remain easy to inspect manually
     output << session.dump(4) << '\n';
+}
+
+
+/**
+ * setActiveProjectForCurrentSession()
+ * Saves the active project for the current logical gptbridge session
+ */
+void setActiveProjectForCurrentSession(const std::string& projectName) {
+    // Resolve the current session once, then use the shared storage-aware writer
+    setActiveProject(PersistentSessionStorage::forCurrentSession(), projectName);
 }

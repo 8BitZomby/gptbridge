@@ -7,6 +7,20 @@
 
 
 /**
+ * ensurePrivateDirectory()
+ * Creates a directory tree and restricts it to the current user
+ */
+void ensurePrivateDirectory(const std::filesystem::path& path);
+
+
+/**
+ * ensurePrivateFile()
+ * Creates a file with owner-only permission or repairs an existing file's permission
+ */
+void ensurePrivateFile(const std::filesystem::path& path);
+
+
+/**
  * ensureStorageRoot()
  * Creates the global storage directory if it does not already exist
  */

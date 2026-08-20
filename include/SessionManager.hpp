@@ -1,6 +1,8 @@
 #ifndef GPTB_SESSION_MANAGER_HPP
 #define GPTB_SESSION_MANAGER_HPP
 
+#include "PersistentSessionStorage.hpp"
+
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -14,6 +16,13 @@ struct SessionInfo {
     std::string id;
     std::string activeProject;
 };
+
+
+/**
+ * validateSessionId()
+ * Rejects session identifiers that are unsafe to use as filesystem path components
+ */
+void validateSessionId(const std::string& sessionId);
 
 
 /**
@@ -32,31 +41,31 @@ std::string getCurrentSessionId();
 
 /**
  * getActiveProject()
- * Returns the active project for the current terminal.
- * An empty string means this session has no active project yet.
+ * Returns the active project stored in the supplied persistent session.
+ * An empty string means the session has no active project.
  */
-std::string getActiveProject();
+std::string getActiveProject(const PersistentSessionStorage& sessionStorage);
 
 
 /**
- * getCurrentSessionDirectory()
- * Returns the directory used to store state for the current session
+ * getActiveProjectForCurrentSession()
+ * Returns the active project stored for the current logical gptbridge session
  */
-std::filesystem::path getCurrentSessionDirectory();
-
-
-/**
- * getCurrentSessionPath()
- * Returns the JSON file used to store state for the current session
- */
-std::filesystem::path getCurrentSessionPath();
+std::string getActiveProjectForCurrentSession();
 
 
 /**
  * setActiveProject()
- * Saves the active project name for the current terminal session
+ * Saves the active project in the supplied persistent session.
  */
-void setActiveProject(const std::string& projectName);
+void setActiveProject(const PersistentSessionStorage& sessionStorage, const std::string& projectName);
+
+
+/**
+ * setActiveProjectForCurrentSession()
+ * Saves the active project for the current logical gptbridge session
+ */
+void setActiveProjectForCurrentSession(const std::string& projectName);
 
 
 #endif
