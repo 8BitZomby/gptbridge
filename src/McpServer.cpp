@@ -64,15 +64,41 @@ int McpServer::run() {
         if(line.empty()) {
             continue;
         }
+
+        nlohmann::json message;
+
         try {
-            // Convert the raw JSON text into a structured request
-            const nlohmann::json message = nlohmann::json::parse(line);
-            handleMessage(message);
+            // Parse separately so malformed JSON can receive the required null-ID error
+            message = nlohmann::json::parse(line);
         }
         catch(const nlohmann::json::parse_error&) {
             // Invalid JSON cannot provide a usable request ID, so JSON-RPC
             // requires a parse-error response with a null ID
             sendJsonRpcError(nullptr, -32700, "Parse error");
+            continue;
+        }
+
+        try {
+            // Handle one valid JSON message without allowing failures to stop the server
+            handleMessage(message);
+        }
+        catch(const std::exception& error) {
+            // Keep the detailed internal failure local to the server process
+            std::cerr << "gptb MCP: internal error: " << error.what() << '\n';
+
+            if(!message.contains("id")) {
+                continue;
+            }
+
+            // Tool execution failures use MCP's tool-level error result
+            if(message.contains("method") && message["method"].is_string() && message["method"] == "tools/call") {
+
+                sendToolError(message["id"], "Internal server error");
+                continue;
+            }
+
+            // Unexpected failures in other JSON-RPC requests use Internal error
+            sendJsonRpcError(message["id"], -32603, "Internal error");
         }
     }
 
