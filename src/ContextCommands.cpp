@@ -118,6 +118,7 @@ int handlePushCommand(int argc, char* argv[]) {
             std::cout << "s";
         }
         std::cout << " available\n";
+        std::cout << "Pushed 0 terminal interactions\n";
         return 1;
     }
 
@@ -178,14 +179,27 @@ int handlePushCommand(int argc, char* argv[]) {
  */
 int handleShowCommand(int argc, char* argv[]) {
     // "gptb show" displays all terminal I/O currently selected as context
-    if(argc != 2) {
-        std::cout << "Usage: gptb show\n";
+    // "gptb show --count" reports how many interactions are currently stored
+    if(argc != 2 && !(argc == 3 && std::string(argv[2]) == "--count")) {
+        std::cout << "Usage: gptb show [--count]\n";
         return 1;
     }
 
     // Load the persistent terminal context for the current gptbridge session
     TerminalContext terminalContext(PersistentSessionStorage::forCurrentSession());
     const std::vector<TerminalInteraction> interactions = terminalContext.loadAll();
+
+    // Count mode reports the number of interactions without displaying them
+    if(argc == 3) {
+        std::cout << interactions.size() << " terminal interaction";
+
+        if(interactions.size() != 1) {
+            std::cout << "s";
+        }
+
+        std::cout << " in context\n";
+        return 0;
+    }
 
     // An empty context means nothing has been pushed yet
     if(interactions.empty()) {
