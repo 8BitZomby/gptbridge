@@ -67,6 +67,7 @@ add_executable(gptb
     src/ShellCommands.cpp
     src/ShellIntegration.cpp
     src/ShellIntegrationEncoder.cpp
+    src/StatusCommands.cpp
     src/TemporaryInteractionHistory.cpp
     src/TerminalContext.cpp
     src/TerminalInteractionJson.cpp

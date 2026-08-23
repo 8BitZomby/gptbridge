@@ -5,6 +5,7 @@
 #include "ProjectCommands.hpp"
 #include "SessionCommands.hpp"
 #include "ShellCommands.hpp"
+#include "StatusCommands.hpp"
 
 #include <exception>
 #include <iostream>
