@@ -1,5 +1,6 @@
 #include "ShellCommands.hpp"
 #include "PtyCaptureBackend.hpp"
+#include "SessionManager.hpp"
 #include "ShellIntegration.hpp"
 #include "ShellIntegrationEncoder.hpp"
 
@@ -135,8 +136,11 @@ namespace {
  * Launches the PTY-backed gptbridge managed shell
  */
 int runManagedShell() {
+    // Resolve the current logical gptbridge session before creating the PTY backend
+    const std::string sessionId = getCurrentSessionId();
+
     // The backend owns the managed PTY session until the user exits the shell
-    PtyCaptureBackend backend;
+    PtyCaptureBackend backend(sessionId);
     backend.run();
 
     return 0;

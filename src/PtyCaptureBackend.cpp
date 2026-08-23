@@ -19,6 +19,16 @@
 #include <type_traits>
 #include <unistd.h>
 #include <util.h>
+#include <utility>
+
+
+/**
+ * Constructor: PtyCaptureBackend()
+ * Creates a PTY backend bound to the supplied logical gptbridge session
+ */
+PtyCaptureBackend::PtyCaptureBackend(std::string sessionId) : sessionId_(std::move(sessionId)) {
+    validateSessionId(sessionId_);
+}
 
 
 // SIGWINCH is delivered when the real terminal window changes size.
@@ -679,10 +689,6 @@ void PtyCaptureBackend::runSession() {
     // metadata belonging to this capture session
     const std::string sessionNonce = generateSessionNonce();
 
-    // Preserve the session identity of the terminal that launched this capture.
-    // The child receives a new PTY device, so it cannot derive this ID itself
-    const std::string sessionId = getCurrentSessionId();
-
     // Resolve the exact gptb executable before forkpty() so the child shell can
     // invoke the same binary for internal shell-event reporting without replying
     // on PATH lookup
@@ -711,7 +717,7 @@ void PtyCaptureBackend::runSession() {
 
     // A return value of 0 means this is the created child process
     if(childPid == 0) {
-        runChildShell(sessionNonce, sessionId, executablePath);
+        runChildShell(sessionNonce, sessionId_, executablePath);
     }
 
     // The parent owns the PTY master descriptor from this point onward.

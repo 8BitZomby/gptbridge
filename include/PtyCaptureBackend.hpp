@@ -24,10 +24,19 @@ class PtyCaptureBackend : public CaptureBackend {
 
     public:
 
+        /**
+         * PtyCaptureBackend()
+         * Creates a PTY backend for the supplied logical gptbridge session
+         */
+        explicit PtyCaptureBackend(std::string sessionId);
+
         // Manages the terminal state for a captured shell session and restores terminal setting when session ends
         void run() override;
 
     private:
+
+        // Stable logical gptbridge session associated with this managed shell
+        std::string sessionId_;
 
         // Runs the interactive shell through pseudo-terminal and forwards traffic until session ends
         void runSession();
