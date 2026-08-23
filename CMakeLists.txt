@@ -59,7 +59,7 @@ add_executable(gptb
     src/ProjectVisibility.cpp
     src/PtyCaptureBackend.cpp
     src/ProjectCommands.cpp
-    src/Storage.cpp
+    src/Random.cpp
     src/SessionCommands.cpp
     src/SessionManager.cpp
     src/SessionNonce.cpp
@@ -68,6 +68,7 @@ add_executable(gptb
     src/ShellIntegration.cpp
     src/ShellIntegrationEncoder.cpp
     src/StatusCommands.cpp
+    src/Storage.cpp
     src/TemporaryInteractionHistory.cpp
     src/TerminalContext.cpp
     src/TerminalInteractionJson.cpp
