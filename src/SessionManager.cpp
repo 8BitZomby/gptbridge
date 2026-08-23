@@ -1,6 +1,7 @@
 #include "Config.hpp"
 #include "SessionManager.hpp"
 #include "PersistentSessionStorage.hpp"
+#include "Random.hpp"
 #include "Storage.hpp"
 
 #include <algorithm>
@@ -11,6 +12,15 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <unistd.h>
+
+
+/**
+ * generateSessionId()
+ * Generates a new stable identifier for a logical gptbridge session
+ */
+std::string generateSessionId() {
+    return "s-" + generateSecureRandomHex(16);
+}
 
 
 /**

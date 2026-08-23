@@ -19,6 +19,13 @@ struct SessionInfo {
 
 
 /**
+ * generateSessionId()
+ * Generates a new stable identifier for a logical gptbridge session
+ */
+std::string generateSessionId();
+
+
+/**
  * validateSessionId()
  * Rejects session identifiers that are unsafe to use as filesystem path components
  */
