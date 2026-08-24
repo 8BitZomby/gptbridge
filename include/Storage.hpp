@@ -1,9 +1,17 @@
 #ifndef GPTB_STORAGE_HPP
 #define GPTB_STORAGE_HPP
 
+#include <cstdint>
 #include <filesystem>
 #include <nlohmann/json.hpp>
 #include <string>
+
+
+/**
+ * allocateNextSessionNumber()
+ * Finds, reserves, and returns the next available logical session number
+ */
+std::uint64_t allocateNextSessionNumber();
 
 
 /**

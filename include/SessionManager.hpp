@@ -3,7 +3,6 @@
 
 #include "PersistentSessionStorage.hpp"
 
-#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -19,10 +18,10 @@ struct SessionInfo {
 
 
 /**
- * generateSessionId()
- * Generates a new stable identifier for a logical gptbridge session
+ * allocateSessionId()
+ * Reserves and returns the next persistent logical gptbridge session ID
  */
-std::string generateSessionId();
+std::string allocateSessionId();
 
 
 /**

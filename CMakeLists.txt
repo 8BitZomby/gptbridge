@@ -61,6 +61,7 @@ add_executable(gptb
     src/ProjectCommands.cpp
     src/Random.cpp
     src/SessionCommands.cpp
+    src/SessionId.cpp
     src/SessionManager.cpp
     src/SessionNonce.cpp
     src/SensitivePath.cpp

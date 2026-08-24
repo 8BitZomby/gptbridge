@@ -1,25 +1,28 @@
-#include "Config.hpp"
 #include "SessionManager.hpp"
+
 #include "PersistentSessionStorage.hpp"
-#include "Random.hpp"
+#include "SessionId.hpp"
 #include "Storage.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <string>
 #include <unistd.h>
 
 
 /**
- * generateSessionId()
- * Generates a new stable identifier for a logical gptbridge session
+ * allocateSessionId()
+ * Reserves and returns the next persistent logical gptbridge session ID
  */
-std::string generateSessionId() {
-    return "s-" + generateSecureRandomHex(16);
+std::string allocateSessionId() {
+    const std::uint64_t sessionNumber = allocateNextSessionNumber();
+    return formatSessionId(sessionNumber);
 }
 
 
