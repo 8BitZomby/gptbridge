@@ -9,7 +9,7 @@
 
 /**
  * SessionInfo
- * Basic information about one saved per-terminal session
+ * Basic information about one saved logical gptbridge session
  */
 struct SessionInfo {
     std::string id;
@@ -25,6 +25,13 @@ std::string allocateSessionId();
 
 
 /**
+ * createSession()
+ * Creates a new persistent logical gptbridge session and returns its ID
+ */
+std::string createSession();
+
+
+/**
  * validateSessionId()
  * Rejects session identifiers that are unsafe to use as filesystem path components
  */
@@ -33,14 +40,15 @@ void validateSessionId(const std::string& sessionId);
 
 /**
  * listSessions()
- * Returns information about all saved per-terminal sessions
+ * Returns information about all saved logical gptbridge sessions
  */
 std::vector<SessionInfo> listSessions();
 
 
 /**
  * getCurrentSessionId()
- * Returns an identifier for the terminal session that invoked gptb
+ * Returns the current logical session ID, falling back to a legacy
+ * terminal-derived ID when no managed-session identity is available
  */
 std::string getCurrentSessionId();
 

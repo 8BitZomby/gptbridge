@@ -133,14 +133,14 @@ namespace {
 
 /**
  * runManagedShell()
- * Launches the PTY-backed gptbridge managed shell
+ * Launches the PTY-backed managed shell attached to the supplied logical session
  */
-int runManagedShell() {
-    // Resolve the current logical gptbridge session before creating the PTY backend
-    const std::string sessionId = getCurrentSessionId();
+int runManagedShell(const std::string& sessionId) {
+    // Session identity is chosen by the caller so starting a new session and
+    // restoring an existing session can use different lifecycle features
+    PtyCaptureBackend backend(sessionId);
 
     // The backend owns the managed PTY session until the user exits the shell
-    PtyCaptureBackend backend(sessionId);
     backend.run();
 
     return 0;
@@ -157,7 +157,7 @@ int handleCaptureCommand(int argc, char* argv[]) {
         return 1;
     }
 
-    return runManagedShell();
+    return runManagedShell(getCurrentSessionId());
 }
 
 

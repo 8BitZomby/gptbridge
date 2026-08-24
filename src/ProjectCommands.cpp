@@ -1,4 +1,5 @@
 #include "ProjectCommands.hpp"
+#include "PersistentSessionStorage.hpp"
 #include "ProjectManager.hpp"
 #include "SessionManager.hpp"
 #include "ShellCommands.hpp"
@@ -67,7 +68,7 @@ int handleAddProjectCommand(int argc, char* argv[]) {
 
 /**
  * handleInitProjectCommand()
- * Registers a project and makes it active for the current session.
+ * Registers a project and makes it active for the appropriate logical session
  */
 int handleInitProjectCommand(int argc, char* argv[]) {
     // "gptb init <path> <project-name>" requires a path and project name.
@@ -77,8 +78,7 @@ int handleInitProjectCommand(int argc, char* argv[]) {
     }
 
     // Normalize the supplied project directory into an absolute path.
-    const std::filesystem::path projectPath =
-        normalizeProjectPath(argv[2]);
+    const std::filesystem::path projectPath = normalizeProjectPath(argv[2]);
 
     if(!validateProjectPath(projectPath)) {
         return 1;
@@ -86,25 +86,37 @@ int handleInitProjectCommand(int argc, char* argv[]) {
 
     const std::string projectName = argv[3];
 
-    // Register the project in the global project registry.
+    // Register the project independently of any particular logical session
     saveProject(projectName, projectPath);
-
-    // Make the newly initialized project active for this session.
-    setActiveProjectForCurrentSession(projectName);
 
     std::cout << "Initialized project: " << projectName << '\n';
     std::cout << "Project path: " << projectPath.string() << '\n';
 
-    // A session nonce means this command is already running inside a
-    // managed shell
+    // A session nonce means this command is already running inside a managed
+    // shell. In that case, keep using the existing logical session rather than
+    // creating another session inside it
     const char* sessionNonce = std::getenv("GPTB_SESSION_NONCE");
 
     if(sessionNonce != nullptr && *sessionNonce != '\0') {
+        // Make the project active in the logical session inherited by this shell
+        setActiveProjectForCurrentSession(projectName);
         return 0;
     }
 
-    // Outside a managed shell, initialization immediately enters one
-    return runManagedShell();
+    // Starting from a normal shell creates a new persistent logical session.
+    // The session ID is allocated before the PTY starts so the child shell can
+    // inherit a stable identity that is independent of the terminal device
+    const std::string sessionId = createSession();
+
+    // Store the initialized project in the newly created session explicitly.
+    // This avoids falling back to the outer terminal's legacy TTY-based identity
+    const PersistentSessionStorage sessionStorage = PersistentSessionStorage::forExplicitSessionId(sessionId);
+
+    // Make the initialized project active in the newly created logical session
+    setActiveProject(sessionStorage, projectName);
+
+    // Launch the managed PTY attached to the new persistent logical session
+    return runManagedShell(sessionId);
 }
 
 
@@ -206,5 +218,5 @@ int handleRestoreCommand(int argc, char* argv[]) {
 
     std::cout << "Restoring project: " << projectName << '\n';
 
-    return runManagedShell();
+    return runManagedShell(getCurrentSessionId());
 }

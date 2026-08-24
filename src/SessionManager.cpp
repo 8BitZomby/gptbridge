@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <unistd.h>
 
 
@@ -56,6 +57,71 @@ void validateSessionId(const std::string& sessionId) {
     if(!validCharacters) {
         throw std::runtime_error("Invalid gptbridge session ID");
     }
+}
+
+
+/**
+ * createSession()
+ * Creates a new persistent logical gptbridge session and returns its ID
+ */
+std::string createSession() {
+    // Reserve a unique logical session ID and its session directory
+    const std::string sessionId = allocateSessionId();
+
+    // Resolve persistent storage directly from the new logical session ID
+    const PersistentSessionStorage sessionStorage = PersistentSessionStorage::forExplicitSessionId(sessionId);
+
+    // A valid persistent session has a state.json file even before a project
+    // has been selected
+    const std::filesystem::path statePath = sessionStorage.getSessionStatePath();
+
+    try {
+        // Create the state file with owner-only permissions
+        ensurePrivateFile(statePath);
+
+        // Initialize the session with an empty state object. Session properties
+        // such as active_project can be added independently afterward
+        std::ofstream output(statePath);
+
+        if(!output) {
+            throw std::runtime_error("Failed to open new session file for writing");
+        }
+
+        output << nlohmann::json::object().dump(4) << '\n';
+
+        if(!output) {
+            throw std::runtime_error("Failed to write new session file");
+        }
+    }
+    catch(...) {
+        // The ID has not been returned to a caller yet, so a failed
+        // initialization should not leave a half-created session directory
+
+        // Use the non-throwing filesystem overloads here because cleanup is happening
+        // while another exception is already active. If remove() threw a new exception
+        // it could hide the original error that actually caused session creation to fail
+        std::error_code cleanupError;
+
+        // Remove a partially created state.json if one exists
+        std::filesystem::remove(
+                statePath,
+                cleanupError
+        );
+
+        // Reuse the same error_code for the directory cleanup attempt
+        cleanupError.clear();
+
+        // Remove the reserved session directory once its state file is gone.
+        // Cleanup is best-effort; the original initialization failure is rethrown below
+        std::filesystem::remove(
+                sessionStorage.getSessionDirectory(),
+                cleanupError
+        );
+
+        throw;
+    }
+
+    return sessionId;
 }
 
 
@@ -157,7 +223,7 @@ std::string getCurrentSessionId() {
 
 /**
  * listSessions()
- * Scans the saved per-terminal session files and returns basic information
+ * Scans the saved logical session directories and returns basic information
  * about each session, including its ID and currently active project.
  */
 std::vector<SessionInfo> listSessions() {
@@ -169,7 +235,7 @@ std::vector<SessionInfo> listSessions() {
     }
     std::vector<SessionInfo> sessions;
 
-    // Inspect each saved per-terminal session directory
+    // Inspect each saved logical session directory
     for(const auto& entry : std::filesystem::directory_iterator(sessionsDir)) {
         // Each saved session is represented by its own directory
         if(!entry.is_directory()) {
@@ -202,7 +268,7 @@ std::vector<SessionInfo> listSessions() {
 
         SessionInfo info;
 
-        // The directory name identifies the terminal session, e.g. "ttys007"
+        // The directory name identifies the logical session, e.g. "s-0001"
         info.id = sessionDir.filename().string();
 
         // A session may exist before any project has been selected
@@ -211,7 +277,7 @@ std::vector<SessionInfo> listSessions() {
         }
         sessions.push_back(info);
     }
-    // Keep session output deterministic by sorting on the terminal session ID
+    // Keep session output deterministic by sorting on the logical session ID
     std::sort(
         sessions.begin(), sessions.end(), [](const SessionInfo& left, const SessionInfo& right) {
             return left.id < right.id;

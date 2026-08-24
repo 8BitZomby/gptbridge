@@ -39,19 +39,14 @@ PersistentSessionStorage PersistentSessionStorage::forCurrentSession() {
 /**
  * forExplicitSessionId()
  * Resolves persistent storage for a caller that supplies the logical session
- * identity itself, such as the MCP server
+ * identity explicitly
  */
 PersistentSessionStorage PersistentSessionStorage::forExplicitSessionId(const std::string& sessionId) {
-    // Keep the explicit session API invariant that every supplied session ID is
-    // structurally valid, even when Global mode does not use it in the path
+    // Reject malformed logical session IDs before using one in a storage path
     validateSessionId(sessionId);
 
-    // All logical sessions share the same persistent storage in Global mode
-    if(getSessionMode() == SessionMode::Global) {
-        return PersistentSessionStorage(getStorageRoot() / "global-session");
-    }
-
-    // Per-terminal mode stores each logical session beneath its own directory
+    // An explicit logical session always owns its own persistent directory,
+    // independent of the legacy global/per-terminal session mode
     return PersistentSessionStorage(getStorageRoot() / "sessions" / sessionId);
 }
 
