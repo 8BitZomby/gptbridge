@@ -46,6 +46,14 @@ std::vector<SessionInfo> listSessions();
 
 
 /**
+ * getMostRecentlyUsedSessionId()
+ * Returns the logical session ID with the newest last_used_at timestamp.
+ * Returns an empty string when no saved session has a usage timestamp
+ */
+std::string getMostRecentlyUsedSessionId();
+
+
+/**
  * getCurrentSessionId()
  * Returns the current logical session ID, falling back to a legacy
  * terminal-derived ID when no managed-session identity is available
@@ -73,6 +81,13 @@ std::string getActiveProjectForCurrentSession();
  * Saves the active project in the supplied persistent session.
  */
 void setActiveProject(const PersistentSessionStorage& sessionStorage, const std::string& projectName);
+
+
+/**
+ * markSessionUsed()
+ * Records the current time as the session's most recent use
+ */
+void markSessionUsed(const PersistentSessionStorage& sessionStorage);
 
 
 /**

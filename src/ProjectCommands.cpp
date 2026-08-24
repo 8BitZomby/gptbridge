@@ -115,6 +115,10 @@ int handleInitProjectCommand(int argc, char* argv[]) {
     // Make the initialized project active in the newly created logical session
     setActiveProject(sessionStorage, projectName);
 
+    // This session is about to become the active managed session, so record
+    // it as the most recently used logical session
+    markSessionUsed(sessionStorage);
+
     // Launch the managed PTY attached to the new persistent logical session
     return runManagedShell(sessionId);
 }
@@ -165,13 +169,14 @@ int handleUseProjectCommand(int argc, char* argv[]) {
 
 /**
  * handleRestoreCommand()
- * Re-enters a managed shell using the current or explicitly selected project
+ * Re-enters a managed shell using the most recently used or explicitly
+ * selected logical session
  */
 int handleRestoreCommand(int argc, char* argv[]) {
-    // "gptb restore" uses the current session's saved active project.
-    // "gptb restore <project>" selects a registered project before restoring.
+    // "gptb restore" restores the most recently used logical session
+    // "gptb restore <session-id>" restores the specified logical session
     if(argc != 2 && argc != 3) {
-        std::cout << "Usage: gptb restore [project]\n";
+        std::cout << "Usage: gptb restore [session-id]\n";
         return 1;
     }
 
@@ -184,39 +189,55 @@ int handleRestoreCommand(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string projectName;
+    std::string sessionId;
 
     if(argc == 3) {
-        // An explicitly named project must already exist in the registry
-        projectName = argv[2];
-
-        if(!projectExists(projectName)) {
-            std::cout << "Project not found: " << projectName << '\n';
-            return 1;
-        }
-
-        // Make the requested project active for this terminal session
-        setActiveProjectForCurrentSession(projectName);
+        // An explicit argument selects the requested logical session
+        sessionId = argv[2];
     }
     else {
-        // Without a project arguement, restore the project already saved for
-        // this terminal session
-        projectName = getActiveProjectForCurrentSession();
+        // Without an argument, restore whichever logical session most
+        // recently became active
+        sessionId = getMostRecentlyUsedSessionId();
 
-        if(projectName.empty()) {
-            std::cout << "No project to restore for this session\n";
-            return 1;
-        }
-
-        // Session state can outlive a project registry entry, so verify that
-        // the saved project is still registered before entering the shell
-        if(!projectExists(projectName)) {
-            std::cout << "Saved project is no longer registered: " << projectName << '\n';
+        if(sessionId.empty()) {
+            std::cout << "No restorable gptbridge sessions\n";
             return 1;
         }
     }
 
-    std::cout << "Restoring project: " << projectName << '\n';
+    // Resolve the requested logical session explicitly so restore never falls
+    // back to the outer terminal's legacy TTY-derived identity
+    const PersistentSessionStorage sessionStorage = PersistentSessionStorage::forExplicitSessionId(sessionId);
 
-    return runManagedShell(getCurrentSessionId());
+    // A valid restorable session must have completed initialization and therefore
+    // have a persistent state.json file
+    if(!std::filesystem::exists(sessionStorage.getSessionStatePath())) {
+        std::cout << "Session not found: " << sessionId << '\n';
+        return 1;
+    }
+
+    // A logical session may exist without an active project
+    const std::string projectName = getActiveProject(sessionStorage);
+
+    // If a project is saved, make sure it is still registered before
+    // entering the managed shell
+    if(!projectName.empty() && !projectExists(projectName)) {
+        std::cout << "Saved project is no longer registered: " << projectName << '\n';
+        return 1;
+    }
+
+    std::cout << "Restoring session: " << sessionId;
+
+    if(!projectName.empty()) {
+        std::cout << " (" << projectName << ")";
+    }
+    std::cout << '\n';
+
+    // This session is about to become the active managed session, so update
+    // its last-used timestamp before launching the PTY
+    markSessionUsed(sessionStorage);
+
+    // Re-enter the existing logical session using its persistent identity
+    return runManagedShell(sessionId);
 }

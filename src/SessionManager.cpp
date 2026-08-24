@@ -3,6 +3,7 @@
 #include "PersistentSessionStorage.hpp"
 #include "SessionId.hpp"
 #include "Storage.hpp"
+#include "TimeUtils.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -288,6 +289,70 @@ std::vector<SessionInfo> listSessions() {
 
 
 /**
+ * getMostRecentlyUsedSessionId()
+ * Returns the logical session ID with the newest last_used_at timestamp.
+ * Returns an empty string when no saved session has a usage timestamp
+ */
+std::string getMostRecentlyUsedSessionId() {
+    const std::filesystem::path sessionsDir = getStorageRoot() / "sessions";
+
+    // No logical session exists yet if the parent directory is missing
+    if(!std::filesystem::exists(sessionsDir)) {
+        return "";
+    }
+
+    std::string mostRecentSessionId;
+    std::string mostRecentTimestamp;
+
+    // Inspect each initialized logical session
+    for(const auto& entry : std::filesystem::directory_iterator(sessionsDir)) {
+        if(!entry.is_directory()) {
+            continue;
+        }
+
+        const std::filesystem::path statePath = entry.path() / "state.json";
+
+        // Ignore incomplete reserved directories that do not have session state
+        if(!std::filesystem::exists(statePath)) {
+            continue;
+        }
+
+        std::ifstream input(statePath);
+
+        if(!input) {
+            throw std::runtime_error("Failed to open session file for reading");
+        }
+
+        nlohmann::json session;
+
+        try {
+            input >> session;
+        }
+        catch(const nlohmann::json::parse_error&) {
+            throw std::runtime_error("Failed to parse session file: " + statePath.string());
+        }
+
+        // Older sessions may predate last_used_at. They cannot participate in
+        // most-recent selection until they are explicitly activated again
+        if(!session.contains("last_used_at")) {
+            continue;
+        }
+
+        const std::string timestamp = session.at("last_used_at").get<std::string>();
+
+        // ISO 8601 UTC timestamps in the shared YYYY-MM-DDTHH:MM:SSZ format
+        // sort lexicographically in chronological order
+        if(mostRecentSessionId.empty() || timestamp > mostRecentTimestamp) {
+            mostRecentTimestamp = timestamp;
+            mostRecentSessionId = entry.path().filename().string();
+        }
+    }
+
+    return mostRecentSessionId;
+}
+
+
+/**
  * setActiveProject()
  * Saves the active project in the supplied persistent session
  */
@@ -334,6 +399,58 @@ void setActiveProject(const PersistentSessionStorage& sessionStorage, const std:
 
     // Write formatted JSON so session files remain easy to inspect manually
     output << session.dump(4) << '\n';
+}
+
+
+/**
+ * markSessionUsed()
+ * Records the current time as the session's most recent use
+ */
+void markSessionUsed(const PersistentSessionStorage& sessionStorage) {
+    // A session must have a persistent state file before its usage timestamp
+    // can be updated
+    sessionStorage.ensureSessionDirectoryExists();
+
+    const std::filesystem::path sessionPath = sessionStorage.getSessionStatePath();
+
+    nlohmann::json session;
+
+    // Preserve existing session properties such as active_project while
+    // updating only the last-used timestamp
+    if(std::filesystem::exists(sessionPath)) {
+        std::ifstream input(sessionPath);
+
+        if(!input) {
+            throw std::runtime_error("Failed to open session file for reading");
+        }
+
+        try {
+            input >> session;
+        }
+        catch(const nlohmann::json::parse_error&) {
+            // Do not overwrite malformed state just to update its timestamp
+            throw std::runtime_error("Failed to parse session file");
+        }
+    }
+
+    // Store UTC ISO 8601 so timestamps from different sessions can be compared
+    // directly without depending on the user's local timezone
+    session["last_used_at"] = currentTimestampUtc();
+
+    // Preserve the same owner-only permissions used by other session state
+    ensurePrivateFile(sessionPath);
+
+    std::ofstream output(sessionPath);
+
+    if(!output) {
+        throw std::runtime_error("Failed to open session file for writing");
+    }
+
+    output << session.dump(4) << '\n';
+
+    if(!output) {
+        throw std::runtime_error("Failed to write session file");
+    }
 }
 
 
