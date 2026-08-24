@@ -54,8 +54,11 @@ namespace {
      * Prints one stored terminal interaction with its display number
      */
     void printInteraction(const TerminalInteraction& interaction, std::size_t displayIndex) {
-        // Show the interaction number and original command
-        std::cout << "[" << displayIndex << "] " << interaction.command << '\n';
+        // Make the interaction number and command visually distinct from its output.
+        // Reset formatting immediately afterward so captured output remains untouched
+        std::cout << "\033[1m"
+                << "[" << displayIndex << "] › " << interaction.command
+                << "\033[0m\n";
 
         // Print captured output directly below the command when present
         if(!interaction.output.empty()) {
