@@ -1,18 +1,18 @@
 #include "StatusCommands.hpp"
 
-#include "Config.hpp"
+#include "PersistentSessionStorage.hpp"
 #include "ProjectManager.hpp"
 #include "SessionManager.hpp"
-#include "Storage.hpp"
 
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 
 
 /**
  * handleStatusCommand()
- * Displays the current gptbridge storage, session, and active-project state.
+ * Displays the logical session and project currently attached to this shell
  */
 int handleStatusCommand(int argc, char* argv[]) {
     // "gptb status" does not accept additional arguments.
@@ -22,46 +22,37 @@ int handleStatusCommand(int argc, char* argv[]) {
     }
 
     std::cout << "gptbridge status\n";
-    std::cout << "Storage root: " << getStorageRoot() << '\n';
 
-    // Resolve the session mode before inspecting mode-specific state.
-    const SessionMode sessionMode = getSessionMode();
+    // A normal terminal outside a managed gptbridge shell has no current
+    // logical session to report
+    const std::optional<std::string> sessionId =  getCurrentSessionId();
 
-    std::cout << "Session mode: "
-              << sessionModeToString(sessionMode)
-              << '\n';
-
-    // A terminal ID only applies when each terminal has separate state.
-    if(sessionMode == SessionMode::PerTerminal) {
-        std::cout << "Session ID: "
-                  << getCurrentSessionId()
-                  << '\n';
+    if(!sessionId.has_value()) {
+        std::cout << "No session attached\n";
+        return 0;
     }
 
-    // Determine which project is currently selected for this session.
-    const std::string activeProject = getActiveProjectForCurrentSession();
+    std::cout << "Session: " << *sessionId << '\n';
+
+    // Read persistent state directly from the attached logical session
+    const PersistentSessionStorage sessionStorage = PersistentSessionStorage::forExplicitSessionId(*sessionId);
+    const std::string activeProject = getActiveProject(sessionStorage);
 
     if(activeProject.empty()) {
-        std::cout << "Active project: none\n";
+        std::cout << "Project: none\n";
         return 0;
     }
 
-    // Session state may reference a project that has since been removed.
+    // Session state may reference a project that has since been removed
     if(!projectExists(activeProject)) {
-        std::cout << "Active project: "
-                  << activeProject
-                  << " (not registered)\n";
+        std::cout << "Project: " << activeProject << " (not registered)\n";
         return 0;
     }
 
-    // Show the saved root path for the active registered project.
-    const std::filesystem::path activeProjectPath =
-        getProjectPath(activeProject);
+    const std::filesystem::path activeProjectPath = getProjectPath(activeProject);
 
-    std::cout << "Active project: " << activeProject << '\n';
-    std::cout << "Project path: "
-              << activeProjectPath.string()
-              << '\n';
+    std::cout << "Project: " << activeProject << '\n';
+    std::cout << "Project path: " << activeProjectPath.string() << '\n';
 
     return 0;
 }

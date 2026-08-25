@@ -45,7 +45,6 @@ configure_file(
 
 add_executable(gptb
     src/CaptureCoordinator.cpp
-    src/Config.cpp
     src/CommandLine.cpp
     src/ContextCommands.cpp
     src/ControlProtocolParser.cpp

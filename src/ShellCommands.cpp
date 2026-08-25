@@ -157,7 +157,14 @@ int handleCaptureCommand(int argc, char* argv[]) {
         return 1;
     }
 
-    return runManagedShell(getCurrentSessionId());
+    const std::optional<std::string> sessionId = getCurrentSessionId();
+
+    if(!sessionId.has_value()) {
+        std::cout << "No logical gptbridge session is attached to the current shell\n";
+        return 1;
+    }
+
+    return runManagedShell(*sessionId);
 }
 
 

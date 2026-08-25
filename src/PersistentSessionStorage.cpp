@@ -1,9 +1,10 @@
 #include "PersistentSessionStorage.hpp"
 
-#include "Config.hpp"
 #include "SessionManager.hpp"
 #include "Storage.hpp"
 
+#include <optional>
+#include <stdexcept>
 #include <utility>
 
 
@@ -18,21 +19,19 @@ PersistentSessionStorage::PersistentSessionStorage(
 
 /**
  * forCurrentSession()
- * Resolves persistent storage for the logical session associated with
- * the current CLI process
+ * Resolves persistent storage for the logical session attached to the
+ * current managed shell
  */
 PersistentSessionStorage PersistentSessionStorage::forCurrentSession() {
-    // Global mode deliberately has no terminal-specific identity. Avoid
-    // resolving a TTY because one is neither required nor meaningful here
-    if(getSessionMode() == SessionMode::Global) {
-        return PersistentSessionStorage(getStorageRoot() / "global-session");
+    // Persistent "current session" storage only exists while this process is
+    // running inside a managed logical gptbridge session
+    const std::optional<std::string> sessionId = getCurrentSessionId();
+
+    if(!sessionId.has_value()) {
+        throw std::runtime_error("No logical gptbridge session is attached to the current shell");
     }
 
-    // Per-terminal mode uses the logical gptbridge session ID. Inside a managed
-    // shell this may come from GPTB_SESSION_ID, otherwise it comes from the TTY
-    const std::string sessionId = getCurrentSessionId();
-
-    return PersistentSessionStorage(getStorageRoot() / "sessions" / sessionId);
+    return forExplicitSessionId(*sessionId);
 }
 
 
@@ -45,8 +44,7 @@ PersistentSessionStorage PersistentSessionStorage::forExplicitSessionId(const st
     // Reject malformed logical session IDs before using one in a storage path
     validateSessionId(sessionId);
 
-    // An explicit logical session always owns its own persistent directory,
-    // independent of the legacy global/per-terminal session mode
+    // Every logical session owns its own persistent directory under sessions/<id>
     return PersistentSessionStorage(getStorageRoot() / "sessions" / sessionId);
 }
 

@@ -3,6 +3,7 @@
 
 #include "PersistentSessionStorage.hpp"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -61,10 +62,10 @@ std::string getMostRecentlyUsedSessionId();
 
 /**
  * getCurrentSessionId()
- * Returns the current logical session ID, falling back to a legacy
- * terminal-derived ID when no managed-session identity is available
+ * Returns the logical session attached to the current managed shell.
+ * Returns std::nullopt when this process is not inside a managed session.
  */
-std::string getCurrentSessionId();
+std::optional<std::string> getCurrentSessionId();
 
 
 /**

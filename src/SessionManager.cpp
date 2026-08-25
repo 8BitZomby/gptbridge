@@ -181,45 +181,22 @@ std::string getActiveProjectForCurrentSession() {
 
 /**
  * getCurrentSessionId()
- * Returns the logical gptbridge session associated with the current terminal
+ * Returns the logical session attached to the current managed shell.
+ * Returns std::nullopt when this process is not inside a managed session.
  */
-std::string getCurrentSessionId() {
-
-    // A managed child shell inherits the session ID of the terminal that
-    // launched it, even though forkpty() assigns the child a new PTY device
+std::optional<std::string> getCurrentSessionId() {
+    // Managed child shells inherit the stable logical session ID chosen by
+    // the parent gptb process
     const char* inheritedSessionId = std::getenv("GPTB_SESSION_ID");
 
-    if(inheritedSessionId != nullptr && *inheritedSessionId != '\0') {
-        // Inherited session IDs originate from the environment, so validate
-        // them before they can be used as filesystem path components
-        validateSessionId(inheritedSessionId);
-
-        return inheritedSessionId;
+    if(inheritedSessionId == nullptr || *inheritedSessionId == '\0') {
+        return std::nullopt;
     }
 
-    // ttyname() returns the terminal device attached to standard input,
-    // for example "/dev/ttys003" on macOS
-    const char* terminal = ttyname(STDIN_FILENO);
-
-    // If stdin is not attached to a terminal, there is no per-terminal
-    // session identity we can safely use
-    if(terminal == nullptr) {
-        throw std::runtime_error("Unable to determine current terminal session");
-    }
-
-    // Keep only the device name so it can be used safely as a session key/file name
-    std::string sessionId = terminal;
-
-    const std::size_t slash = sessionId.find_last_of('/');
-    if(slash != std::string::npos) {
-        sessionId = sessionId.substr(slash + 1);
-    }
-
-    // Keep one invariant: every session ID returned by this function is safe
-    // to use as a single filesystem path component
-    validateSessionId(sessionId);
-
-    return sessionId;
+    // Environment-provided session IDs must be validated before they are used
+    // as filesystem path components
+    validateSessionId(inheritedSessionId);
+    return std::string(inheritedSessionId);
 }
 
 

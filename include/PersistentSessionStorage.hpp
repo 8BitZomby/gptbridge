@@ -10,18 +10,18 @@
  * Represents the persistent storage location belonging to one logical
  * gptbridge session.
  *
- * This class is the single authority for deciding whether persistent session
- * data lives in the shared global-session directory or in a per-terminal sessions/<id> directory
+ * Each logical session owns its own directory under sessions/<id>. This class
+ * centalizes construction of the persistent paths used by that session.
  *
- * TemporaryInteractionHistory is intentionally separate because live capture
- * history is identified by a capture nonce rather than persistent session mode
+ * TemporaryInteractionHistory remains separate because live capture history is
+ * identified by a capture nonce rather than the persistent logical session ID.
  */
 class PersistentSessionStorage {
     public:
         /**
          * forCurrentSession()
-         * Resolves persistent storage for the session associated with the
-         * current CLI terminal, honoring the configured session mode
+         * Resolves persistent storage for the logical session attached to the
+         * current managed shell
          */
         static PersistentSessionStorage forCurrentSession();
 

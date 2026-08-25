@@ -7,8 +7,6 @@
 enum class SessionCommand {
     List,
     Close,
-    Global,
-    PerTerminal,
     Unknown
 };
 
@@ -21,8 +19,8 @@ SessionCommand parseSessionCommand(const std::string& command);
 
 /**
  * handleSessionCommand()
- * Handles session listing, closing, and legacy sesion-mode commands.
- * Handles "gptb session <close|list|global|per-terminal>".
+ * Handles logical-session management commands.
+ * Handles "gptb session <close|list>".
  */
 int handleSessionCommand(int argc, char* argv[]);
 

@@ -1,5 +1,4 @@
 #include "SessionCommands.hpp"
-#include "Config.hpp"
 #include "SessionAttachment.hpp"
 #include "SessionManager.hpp"
 
@@ -81,8 +80,6 @@ namespace {
 SessionCommand parseSessionCommand(const std::string& command) {
     if(command == "close") { return SessionCommand::Close; }
     if(command == "list") { return SessionCommand::List; }
-    if(command == "global") { return SessionCommand::Global; }
-    if(command == "per-terminal") { return SessionCommand::PerTerminal; }
 
     return SessionCommand::Unknown;
 }
@@ -90,52 +87,39 @@ SessionCommand parseSessionCommand(const std::string& command) {
 
 /**
  * handleSessionCommand()
- * Handles session listing, closing, and legacy session-mode commands
- * Handles "gptb session <close|list|global|per-terminal>"
+ * Validates and dispatches logical-session management commands
  */
 int handleSessionCommand(int argc, char* argv[]) {
-    // Most session commands take only a subcommand. Commands such as `close`
-    // validate their additional arguments inside their own switch case
+    // "gptb session" requires at least one subcommand
     if(argc < 3) {
-        std::cout << "Usage: gptb session <command>\n";
+        std::cout << "Usage: gptb session <close|list>\n";
         return 1;
     }
 
+    // Conver the requested subcommand once before dispatching it
     const SessionCommand sessionCommand = parseSessionCommand(argv[2]);
 
     switch(sessionCommand) {
         case SessionCommand::Close:
+            // Closing a session requires the logical session ID to target
             if(argc != 4) {
                 std::cout << "Usage: gptb session close <session-id>\n";
                 return 1;
             }
             return closeSessionCommand(argv[3]);
         case SessionCommand::List:
+            // Listing sessions does not accept any additional arguments
             if(argc != 3) {
                 std::cout << "Usage: gptb session list\n";
                 return 1;
             }
             return listSessionCommand();
-        case SessionCommand::Global:
-            if(argc != 3) {
-                std::cout << "Usage: gptb session global\n";
-                return 1;
-            }
-            setSessionMode(SessionMode::Global);
-            break;
-        case SessionCommand::PerTerminal:
-            if(argc != 3) {
-                std::cout << "Usage: gptb session per-terminal\n";
-                return 1;
-            }
-            setSessionMode(SessionMode::PerTerminal);
-            break;
         case SessionCommand::Unknown:
             std::cout << "Unknown session command: " << argv[2] << '\n';
             std::cout << "Usage: gptb session <command>\n";
             return 1;
     }
 
-    std::cout << "Session mode: " << sessionModeToString(getSessionMode()) << '\n';
-    return 0;
+    // All enum values are handled above. Fallback for compiler and future enums
+    return 1;
 }
