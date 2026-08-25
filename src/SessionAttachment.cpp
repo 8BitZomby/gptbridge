@@ -5,8 +5,10 @@
 
 #include <cerrno>
 #include <fcntl.h>
+#include <fstream>
 #include <filesystem>
 #include <nlohmann/json.hpp>
+#include <signal.h>
 #include <stdexcept>
 #include <string>
 #include <sys/file.h>
@@ -23,6 +25,51 @@ namespace {
         // Validate the session ID before using it as a filesystem path component
         validateSessionId(sessionId);
         return getStorageRoot() / "sessions" / sessionId / "attachments";
+    }
+
+    /**
+     * readSessionAttachmentInfo()
+     * Reads and validates the runtime metadata stored for one session attachment
+     */
+    SessionAttachmentInfo readSessionAttachmentInfo(const std::filesystem::path& attachmentPath) {
+        std::ifstream input(attachmentPath);
+
+        if(!input) {
+            throw std::runtime_error("Failed to open session attachment record");
+        }
+
+        nlohmann::json record;
+
+        try {
+            input >> record;
+        }
+        catch(const nlohmann::json::parse_error&) {
+            throw std::runtime_error("Failed to parse session attachment record: " + attachmentPath.string());
+        }
+
+        // Every attachment record must contain the fields needed to identify and
+        // manage the parent gptb process and its child shell
+        if(!record.contains("id") ||
+            !record.contains("parent_pid") ||
+            !record.contains("child_pid") ||
+            !record.contains("started_at")) {
+
+            throw std::runtime_error("Incomplete session attachment record: " + attachmentPath.string());
+        }
+
+        SessionAttachmentInfo attachmentInfo;
+        attachmentInfo.id = record.at("id").get<std::string>();
+        attachmentInfo.parentPid = record.at("parent_pid").get<pid_t>();
+        attachmentInfo.childPid = record.at("child_pid").get<pid_t>();
+        attachmentInfo.startedAt = record.at("started_at").get<std::string>();
+
+        // PIDs must identify actual processes. Zero and negative values have special
+        // meaning to kill(), so never allow them to come from a stored record
+        if(attachmentInfo.parentPid <= 0 || attachmentInfo.childPid <= 0) {
+            throw std::runtime_error("Invalid process ID in session attachment record: " + attachmentPath.string());
+        }
+
+        return attachmentInfo;
     }
 }
 
@@ -129,6 +176,53 @@ void removeStaleSessionAttachments(const std::string& sessionId) {
         std::error_code cleanupError;
         std::filesystem::remove(entry.path(), cleanupError);
     }
+}
+
+
+/**
+ * closeSessionAttachments()
+ * Requests termination of every live managed-shell attachment belonging to
+ * the logical session
+ */
+std::size_t closeSessionAttachments(const std::string &sessionId) {
+    // Resolve the runtime attachment directory for this logical session
+    const std::filesystem::path attachmentsDirectory = getSessionAttachmentsDirectory(sessionId);
+
+    if(!std::filesystem::exists(attachmentsDirectory)) {
+        return 0;
+    }
+
+    std::size_t closedAttachmentCount = 0;
+
+    for(const auto& entry : std::filesystem::directory_iterator(attachmentsDirectory)) {
+        // Only JSON files in this directory represent attachment records
+        if(!entry.is_regular_file() || entry.path().extension() != ".json") {
+            continue;
+        }
+
+        // An unlocked record belongs to a process that has already exited
+        // Leave its removal to the dedicated stale-record cleanup operation
+        if(!isSessionAttachmentLive(entry.path())) {
+            continue;
+        }
+
+        const SessionAttachmentInfo attachmentInfo = readSessionAttachmentInfo(entry.path());
+
+        // Send SIGHUP to the child shell to end its PTY session. The parent gptb
+        // process can then observe the PTY ending, reap the child, and unwind normally
+        if(::kill(attachmentInfo.childPid, SIGHUP) == -1) {
+            // ESRCH means the shell disappeared after the liveness check. That
+            // race does not make the close operation itself an error
+            if(errno == ESRCH) {
+                continue;
+            }
+            throw std::runtime_error("Failed to terminate session attachment: " + attachmentInfo.id);
+        }
+
+        ++closedAttachmentCount;
+    }
+
+    return closedAttachmentCount;
 }
 
 

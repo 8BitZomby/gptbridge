@@ -1,6 +1,7 @@
 #ifndef GPTB_SESSION_ATTACHMENT_HPP
 #define GPTB_SESSION_ATTACHMENT_HPP
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <sys/types.h>
@@ -48,6 +49,14 @@ bool hasLiveSessionAttachments(const std::string& sessionId);
  * their liveness lock
  */
 void removeStaleSessionAttachments(const std::string& sessionId);
+
+
+/**
+ * closeSessionAttachments()
+ * Requests termination of every live managed-shell attachment belonging to
+ * the logical session. Returns the number of live attachments signalled
+ */
+std::size_t closeSessionAttachments(const std::string& sessionId);
 
 
 /**
