@@ -39,6 +39,14 @@ std::string createSession();
 
 
 /**
+ * deleteSession()
+ * Permanently deletes an inactive logical session and all of its persistent
+ * data. Refuses to delete a session that still has a live attachment
+ */
+void deleteSession(const std::string& sessionId);
+
+
+/**
  * validateSessionId()
  * Rejects session identifiers that are unsafe to use as filesystem path components
  */

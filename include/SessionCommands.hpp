@@ -5,9 +5,10 @@
 
 
 enum class SessionCommand {
-    List,
-    Close,
-    Unknown
+    Close,      // Lists all saved logical sessions and their runtime state
+    Delete,     // Closes every live managed-shell attachment for one logical session
+    List,       // Permanently deletes one inactive logical session
+    Unknown     // Represents an unsupported session subcommand
 };
 
 
@@ -20,7 +21,7 @@ SessionCommand parseSessionCommand(const std::string& command);
 /**
  * handleSessionCommand()
  * Handles logical-session management commands.
- * Handles "gptb session <close|list>".
+ * Handles "gptb session <close|delete|list>".
  */
 int handleSessionCommand(int argc, char* argv[]);
 

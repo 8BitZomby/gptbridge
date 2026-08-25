@@ -128,6 +128,45 @@ std::string createSession() {
 
 
 /**
+ * deleteSession()
+ * Permanently deletes an inactive logical session and all of its persistent data
+ */
+void deleteSession(const std::string& sessionId) {
+    // Validate the supplied ID before resolving its persisten filesystem path
+    validateSessionId(sessionId);
+
+    // Get data for session
+    const PersistentSessionStorage sessionStorage = PersistentSessionStorage::forExplicitSessionId(sessionId);
+    const std::filesystem::path sessionDirectory = sessionStorage.getSessionDirectory();
+    const std::filesystem::path statePath = sessionStorage.getSessionStatePath();
+
+    // state.json distinguishes an intitialized logical session from an
+    // incomplete or unrelated directory under the sessions root
+    if(!std::filesystem::exists(statePath)) {
+        throw std::runtime_error("Session does not exist: " + sessionId);
+    }
+
+    // Remove records left behind by crashed processes before check whether
+    // any managed-shell attachments are still genuinely live
+    removeStaleSessionAttachments(sessionId);
+
+    if(hasLiveSessionAttachments(sessionId)) {
+        throw std::runtime_error("Session is active. Close it before deleting: " + sessionId);
+    }
+
+    std::error_code removalError;
+
+    // Deleting a logical session intentionally removes all persistent data
+    // belonging to it, including terminal context and attachment records
+    std::filesystem::remove_all(sessionDirectory, removalError);
+
+    if(removalError) {
+        std::runtime_error("Failed to delete session: " + sessionId);
+    }
+}
+
+
+/**
  * getActiveProject()
  * Returns the active project stored in the supplied persistent session.
  * An empty string means this session has no active project yet.
