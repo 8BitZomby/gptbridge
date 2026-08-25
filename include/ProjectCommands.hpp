@@ -31,16 +31,4 @@ ProjectCommand parseProjectCommand(const std::string& command);
 int handleProjectCommand(int argc, char* argv[]);
 
 
-/**
- * Handles "gptb init <path> <project-name>".
- */
-int handleInitProjectCommand(int argc, char* argv[]);
-
-
-/**
- * Handles "gptb use <project|.>".
- */
-int handleUseProjectCommand(int argc, char* argv[]);
-
-
 #endif

@@ -50,6 +50,7 @@ add_executable(gptb
     src/ControlProtocolParser.cpp
     src/ExecutablePath.cpp
     src/HelpCommand.cpp
+    src/InitCommand.cpp
     src/main.cpp
     src/McpCommands.cpp
     src/McpServer.cpp
@@ -76,6 +77,7 @@ add_executable(gptb
     src/TerminalInteractionJson.cpp
     src/TerminalSecretDetector.cpp
     src/TimeUtils.cpp
+    src/UseCommand.cpp
 )
 
 target_include_directories(gptb PRIVATE

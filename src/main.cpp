@@ -1,12 +1,14 @@
 #include "CommandLine.hpp"
 #include "ContextCommands.hpp"
 #include "HelpCommand.hpp"
+#include "InitCommand.hpp"
 #include "McpCommands.hpp"
 #include "ProjectCommands.hpp"
 #include "RestoreCommand.hpp"
 #include "SessionCommands.hpp"
 #include "ShellCommands.hpp"
 #include "StatusCommands.hpp"
+#include "UseCommand.hpp"
 
 #include <exception>
 #include <iostream>
@@ -30,7 +32,7 @@ int main(int argc, char* argv[]) {
             case Command::Capture: return handleCaptureCommand(argc, argv);
             case Command::Clear: return handleClearCommand(argc, argv);
             case Command::Help: return handleHelpCommand(argc, argv);
-            case Command::Init: return handleInitProjectCommand(argc, argv);
+            case Command::Init: return handleInitCommand(argc, argv);
             case Command::McpServer: return handleMcpServerCommand(argc, argv);
             case Command::Push: return handlePushCommand(argc, argv);
             case Command::Project: return handleProjectCommand(argc, argv);
@@ -41,7 +43,7 @@ int main(int argc, char* argv[]) {
             case Command::ShellInit: return handleShellInitCommand(argc, argv);
             case Command::Show: return handleShowCommand(argc, argv);
             case Command::Status: return handleStatusCommand(argc, argv);
-            case Command::Use: return handleUseProjectCommand(argc, argv);
+            case Command::Use: return handleUseCommand(argc, argv);
 
             case Command::Unknown:
                 std::cout << "Unknown command: " << argv[1] << '\n';
