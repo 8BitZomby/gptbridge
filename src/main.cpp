@@ -1,6 +1,5 @@
 #include "CommandLine.hpp"
 #include "ContextCommands.hpp"
-#include "ListCommands.hpp"
 #include "McpCommands.hpp"
 #include "ProjectCommands.hpp"
 #include "SessionCommands.hpp"
@@ -26,13 +25,12 @@ int main(int argc, char* argv[]) {
         // Command handler may throw for malformed JSON, filesystem failures,
         // or other storage errors. Handle those at the CLI boundary below.
         switch(command) {
-            case Command::Add: return handleAddProjectCommand(argc, argv);
             case Command::Capture: return handleCaptureCommand(argc, argv);
             case Command::Clear: return handleClearCommand(argc, argv);
             case Command::Init: return handleInitProjectCommand(argc, argv);
-            case Command::List: return handleListCommand(argc, argv);
             case Command::McpServer: return handleMcpServerCommand(argc, argv);
             case Command::Push: return handlePushCommand(argc, argv);
+            case Command::Project: return handleProjectCommand(argc, argv);
             case Command::Remove: return handleRemoveCommand(argc, argv);
             case Command::Restore: return handleRestoreCommand(argc, argv);
             case Command::Session: return handleSessionCommand(argc, argv);

@@ -49,7 +49,6 @@ add_executable(gptb
     src/ContextCommands.cpp
     src/ControlProtocolParser.cpp
     src/ExecutablePath.cpp
-    src/ListCommands.cpp
     src/main.cpp
     src/McpCommands.cpp
     src/McpServer.cpp
