@@ -1,13 +1,17 @@
 #include "PtyCaptureBackend.hpp"
+
 #include "CaptureCoordinator.hpp"
 #include "ControlProtocolParser.hpp"
 #include "ExecutablePath.hpp"
+#include "Random.hpp"
+#include "SessionAttachment.hpp"
 #include "SessionManager.hpp"
 #include "SessionNonce.hpp"
 #include "TimeUtils.hpp"
 
 #include <cerrno>
 #include <cstdlib>
+#include <optional>
 #include <poll.h>
 #include <stdexcept>
 #include <signal.h>
@@ -418,6 +422,35 @@ void PtyCaptureBackend::waitForChild(pid_t childPid) {
 
 
 /**
+ * terminatesChildAfterStartupFailure()
+ * Terminates and reaps the child shell when parent-side PTY setup fails after
+ * forkpty() has already created the child process
+ */
+void PtyCaptureBackend::terminatesChildAfterStartupFailure(pid_t childPid) noexcept {
+    // Parent-side setup may fail after forkpty() has already launched the shell.
+    // Explicitly terminate that child so a failed PTY startup cannot leave an
+    // unmanaged shell process running in the background
+    if(::kill(childPid, SIGTERM) == -1 && errno != ESRCH) {
+        // Cleanup must not throw while another startup exception is active.
+        // Closing the PTY master during stack unwinding provides an additional
+        // hangup path if explicit termination unexpectedly fails
+        return;
+    }
+
+    // Reap the child so it cannot remain as a zombie. Retry when waitpid() is
+    // interrupted by a signal; other failures are ignored here because this
+    // helper must preserve the original startup exception
+    int childStatus = 0;
+
+    while(::waitpid(childPid, &childStatus, 0) == -1) {
+        if(errno != EINTR) {
+            break;
+        }
+    }
+}
+
+
+/**
  * createPollDescriptors()
  * Builds the two descriptors monitored during the forwarding loop:
  * real-terminal input and output arriving from the child PTY
@@ -689,6 +722,11 @@ void PtyCaptureBackend::runSession() {
     // metadata belonging to this capture session
     const std::string sessionNonce = generateSessionNonce();
 
+    // Give this managed-shell attachment its own internal identity. This is kept
+    // separate from the session nonce because attachment identity and OSC
+    // authentication serve different purposes
+    const std::string attachmentId = generateSecureRandomHex(16);
+
     // Resolve the exact gptb executable before forkpty() so the child shell can
     // invoke the same binary for internal shell-event reporting without replying
     // on PATH lookup
@@ -723,6 +761,31 @@ void PtyCaptureBackend::runSession() {
     // The parent owns the PTY master descriptor from this point onward.
     // The guard closes it automatically on every return or exception path
     FileDescriptorGuard masterDescriptor(masterFd);
+
+    // Describe the parent/child process pair that makes up this live attachment
+    const SessionAttachmentInfo attachmentInfo{
+        attachmentId,
+        ::getpid(),
+        childPid,
+        currentTimestampUtc()
+    };
+
+    // Keep the registration alive for the remainder of runSession(). Its file lock
+    // is therefore held for exactly as long as this parent owns the managed shell
+    std::optional<SessionAttachmentRegistration> attachmentRegistration;
+
+    try {
+        attachmentRegistration.emplace(
+            sessionId_,
+            attachmentInfo
+        );
+    }
+    catch(...) {
+        // forkpty() has already created the child. If attachment registration
+        // fails, terminate and reap that shell before propagating the error
+        terminatesChildAfterStartupFailure(childPid);
+        throw;
+    }
 
     // Coordinates command-start, captured-output, and command-finish events
     // while the PTY session is running

@@ -1,6 +1,7 @@
 #include "SessionManager.hpp"
 
 #include "PersistentSessionStorage.hpp"
+#include "SessionAttachment.hpp"
 #include "SessionId.hpp"
 #include "Storage.hpp"
 #include "TimeUtils.hpp"
@@ -276,6 +277,14 @@ std::vector<SessionInfo> listSessions() {
         if(session.contains("active_project")) {
             info.activeProject = session.at("active_project").get<std::string>();
         }
+
+        // Remove attachment records left behind by crashed or force-killed gptb
+        // processes before determining the session's current runtime state
+        removeStaleSessionAttachments(info.id);
+
+        // A session is active when at least one managed-shell attachment is still live
+        info.active = hasLiveSessionAttachments(info.id);
+
         sessions.push_back(info);
     }
     // Keep session output deterministic by sorting on the logical session ID

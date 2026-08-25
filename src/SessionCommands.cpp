@@ -2,6 +2,8 @@
 #include "Config.hpp"
 #include "SessionManager.hpp"
 
+#include <iomanip>
+#include <ios>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -22,9 +24,13 @@ namespace {
             return 0;
         }
 
-        // Display the session ID and active project on one line
+        // Display the session ID, runtime state, and active project on one line
         for(const SessionInfo& session : sessions) {
-            std::cout << session.id << "    ";
+            // Use fixed-width columns so IDs, runtime state, and project names line up
+            // consistently even when individual values have different lengths
+            std::cout << std::left
+                      << std::setw(12) << session.id
+                      << std::setw(12) << (session.active ? "active" : "inactive");
 
             if(session.activeProject.empty()) {
                 std::cout << "none";
@@ -32,10 +38,8 @@ namespace {
             else {
                 std::cout << session.activeProject;
             }
-
             std::cout << '\n';
         }
-
         return 0;
     }
 }

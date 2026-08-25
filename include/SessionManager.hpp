@@ -12,8 +12,14 @@
  * Basic information about one saved logical gptbridge session
  */
 struct SessionInfo {
+    // Stable logical session identifier
     std::string id;
+
+    // Project currently associated with this session, if any
     std::string activeProject;
+
+    // True when at least one managed-shell attachment is currently live
+    bool active = false;
 };
 
 

@@ -62,6 +62,10 @@ class PtyCaptureBackend : public CaptureBackend {
         // Waits for the child shell to terminate and collects its process status
         void waitForChild(pid_t childPid);
 
+        // Terminates and reaps the child shell when parent-side PTY setup fails after
+        // forkpty() has already created the child process
+        void terminatesChildAfterStartupFailure(pid_t childPid) noexcept;
+
         // Creates the poll descriptor set for real-terminal input and child-PTY output
         std::array<pollfd, 2> createPollDescriptors(int masterFd) const;
 
