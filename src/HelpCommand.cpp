@@ -25,7 +25,7 @@ int handleHelpCommand(int argc, char* argv[]) {
         << "      Register a project and create a new logical session.\n"
         << '\n'
         << "  restore [session-id]\n"
-        << "      Restore a saved logical session.\n"
+        << "      Restore the most recent or explicitly requested saved session.\n"
         << '\n'
         << "  status\n"
         << "      Show the session and project attached to this shell.\n"
@@ -38,6 +38,9 @@ int handleHelpCommand(int argc, char* argv[]) {
         << '\n'
         << "  session delete <session-id>\n"
         << "      Permanently delete an inactive logical session.\n"
+        << '\n'
+        << "  session restore [session-id]\n"
+        << "      Restore the most recent or explicitly requested saved session.\n"
         << '\n'
         << "  project list\n"
         << "      List registered projects.\n"

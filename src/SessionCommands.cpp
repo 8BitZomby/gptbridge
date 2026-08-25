@@ -1,4 +1,6 @@
 #include "SessionCommands.hpp"
+
+#include "RestoreCommand.hpp"
 #include "SessionAttachment.hpp"
 #include "SessionManager.hpp"
 
@@ -140,6 +142,7 @@ SessionCommand parseSessionCommand(const std::string& command) {
     if(command == "close") { return SessionCommand::Close; }
     if(command == "delete") { return SessionCommand::Delete; }
     if(command == "list") { return SessionCommand::List; }
+    if(command == "restore") { return SessionCommand::Restore; }
 
     return SessionCommand::Unknown;
 }
@@ -152,14 +155,15 @@ SessionCommand parseSessionCommand(const std::string& command) {
 int handleSessionCommand(int argc, char* argv[]) {
     // "gptb session" requires at least one subcommand
     if(argc < 3) {
-        std::cout << "Usage: gptb session <close|delete|list>\n";
+        std::cout << "Usage: gptb session <close|delete|list|restore>\n";
         return 1;
     }
 
-    // Conver the requested subcommand once before dispatching it
+    // Convert the requested subcommand once before dispatching it
     const SessionCommand sessionCommand = parseSessionCommand(argv[2]);
 
     switch(sessionCommand) {
+
         case SessionCommand::Close:
             // Closing a session requires the logical session ID to target
             if(argc != 4) {
@@ -167,6 +171,7 @@ int handleSessionCommand(int argc, char* argv[]) {
                 return 1;
             }
             return closeSessionCommand(argv[3]);
+
         case SessionCommand::Delete:
             // Deleting a session requires the logical session ID to target
             if(argc != 4) {
@@ -174,6 +179,7 @@ int handleSessionCommand(int argc, char* argv[]) {
                 return 1;
             }
             return deleteSessionCommand(argv[3]);
+
         case SessionCommand::List:
             // Listing sessions does not accept any additional arguments
             if(argc != 3) {
@@ -181,9 +187,22 @@ int handleSessionCommand(int argc, char* argv[]) {
                 return 1;
             }
             return listSessionCommand();
+
+        case SessionCommand::Restore:
+            // "gptb session restore" restores the most recently used session
+            // "gptb session restore <session-id>" restores the requested session
+            if(argc != 3 && argc != 4) {
+                std::cout << "Usage: gptb session restore [session-id]\n";
+                return 1;
+            }
+            if(argc == 4) {
+                return restoreSession(std::string(argv[3]));
+            }
+            return restoreSession(std::nullopt);
+
         case SessionCommand::Unknown:
             std::cout << "Unknown session command: " << argv[2] << '\n';
-            std::cout << "Usage: gptb session <command>\n";
+            std::cout << "Usage: gptb session <close|delete|list|restore>\n";
             return 1;
     }
 

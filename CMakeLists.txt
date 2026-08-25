@@ -59,6 +59,7 @@ add_executable(gptb
     src/PtyCaptureBackend.cpp
     src/ProjectCommands.cpp
     src/Random.cpp
+    src/RestoreCommand.cpp
     src/SessionAttachment.cpp
     src/SessionCommands.cpp
     src/SessionId.cpp

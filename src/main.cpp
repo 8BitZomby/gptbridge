@@ -3,6 +3,7 @@
 #include "HelpCommand.hpp"
 #include "McpCommands.hpp"
 #include "ProjectCommands.hpp"
+#include "RestoreCommand.hpp"
 #include "SessionCommands.hpp"
 #include "ShellCommands.hpp"
 #include "StatusCommands.hpp"

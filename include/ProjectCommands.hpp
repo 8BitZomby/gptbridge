@@ -43,10 +43,4 @@ int handleInitProjectCommand(int argc, char* argv[]);
 int handleUseProjectCommand(int argc, char* argv[]);
 
 
-/**
- * Handles "gptb restore".
- */
-int handleRestoreCommand(int argc, char* argv[]);
-
-
 #endif
