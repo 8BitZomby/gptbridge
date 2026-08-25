@@ -33,6 +33,12 @@ class PersistentSessionStorage {
         static PersistentSessionStorage forExplicitSessionId(const std::string& sessionId);
 
         /**
+         * getSessionId()
+         * Returns the logical session identifier represented by this storage object
+         */
+        std::string getSessionId() const;
+
+        /**
          * getSessionDirectory()
          * Returns the directory containing persistent data for this session
          */

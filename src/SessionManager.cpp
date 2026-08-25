@@ -1,5 +1,6 @@
 #include "SessionManager.hpp"
 
+#include "McpState.hpp"
 #include "PersistentSessionStorage.hpp"
 #include "SessionAttachment.hpp"
 #include "SessionId.hpp"
@@ -424,6 +425,15 @@ void setActiveProject(const PersistentSessionStorage& sessionStorage, const std:
 
     // Write formatted JSON so session files remain easy to inspect manually
     output << session.dump(4) << '\n';
+
+    // Do not update MCP state unless the session state write actually succeeded
+    if(!output) {
+        throw std::runtime_error("Failed to write session file");
+    }
+
+    // Changing a session's active project also makes that logical session the
+    // current MCP target so connected clients follow the user's active work
+    trySetMcpActiveSessionId(sessionStorage.getSessionId());
 }
 
 

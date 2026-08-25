@@ -9,6 +9,7 @@ enum class Command {
     Clear,
     Help,
     Init,
+    Mcp,
     McpServer,
     Push,
     Project,

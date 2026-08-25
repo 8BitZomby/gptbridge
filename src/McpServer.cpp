@@ -1,5 +1,6 @@
 #include "McpServer.hpp"
 
+#include "McpState.hpp"
 #include "PersistentSessionStorage.hpp"
 #include "ProjectManager.hpp"
 #include "ProjectVisibility.hpp"
@@ -22,29 +23,59 @@
 namespace {
     /**
      * tryResolvePersistentSessionStorageForMcp()
-     * Resolves the persistent gptbridge session assigned to this MCP server.
+     * Resolves the persisten logical session currently selected for MCP access.
      *
-     * std::nullopt represents the expected failure case where the MCP process
-     * was started without a GPTB_MCP_SESSION_ID environment variable.
+     * GPTB_MCP_SESSION_ID remains available as an explicit override. Normal MCP
+     * clients instead follow the authoritative active-session pointer maintained
+     * in ~/.gptbridge/mcp-state.json
      */
     std::optional<PersistentSessionStorage> tryResolvePersistentSessionStorageForMcp() {
         // MCP runs without a terminal of its own, so its logical session identity
         // must be supplied explicitly by the process environment
-        const char* sessionId = std::getenv("GPTB_MCP_SESSION_ID");
+        const char* configuredSessionId = std::getenv("GPTB_MCP_SESSION_ID");
+        std::optional<std::string> sessionId;
 
-        if(sessionId == nullptr || *sessionId == '\0') {
-            return std::nullopt;
+        if(configuredSessionId != nullptr && *configuredSessionId != '\0') {
+            // An explicit environment override pins this MCP process to one logical
+            // session instead of following gptbridge's globally selected MCP target
+            sessionId = std::string(configuredSessionId);
+        }
+        else {
+            try {
+                // Normal MCP clients follow the session explicitly selected by
+                // gptbridge commands such as init, use, restore, and mcp sync
+                sessionId = getMcpActiveSessionId();
+            }
+            catch(const std::exception& error) {
+                // Persistent MCP-state failures should fail the current tool call,
+                // not terminate the long-lived stdio MCP server
+                std::cerr << "gptb MCP: failed to resolve MCP state: " << error.what() << '\n';
+                return std::nullopt;
+            }
+
+            if(!sessionId.has_value()) {
+                return std::nullopt;
+            }
         }
 
         try {
-            // PersistentSessionStorage performs session ID validation and applies the
-            // configured Global or PerTerminal storage routing policy in one place
-            return PersistentSessionStorage::forExplicitSessionId(sessionId);
+            // Resolve and validate the selected logical session before any MCP
+            // tool reads project state or terminal context from it
+            const PersistentSessionStorage sessionStorage = PersistentSessionStorage::forExplicitSessionId(sessionId.value());
+
+            // Reject stale MCP state that points at a logical session which has
+            // since been deleted
+            if(!std::filesystem::exists(sessionStorage.getSessionStatePath())) {
+                std::cerr << "gptb MCP: session does not exist: " << sessionId.value() << '\n';
+                return std::nullopt;
+            }
+            return sessionStorage;
         }
-        catch(const std::exception& error) {
-            // Invalid MCP session configuration must fail this tool call rather
-            // than terminating the entire MCP server process
+        catch(std::exception& error) {
+            // Invalid explicit or persisted session IDs fail the tool call without
+            // terminating the MCP server process
             std::cerr << "gptb MCP: invalid session id: " << error.what() << '\n';
+
             return std::nullopt;
         }
     }

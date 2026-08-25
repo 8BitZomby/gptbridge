@@ -1,4 +1,5 @@
 #include "RestoreCommand.hpp"
+#include "McpState.hpp"
 #include "PersistentSessionStorage.hpp"
 #include "ProjectManager.hpp"
 #include "SessionManager.hpp"
@@ -73,6 +74,10 @@ int restoreSession(const std::optional<std::string>& requestedSessionId) {
     // This session is about to become active, so record it as recently used
     // before launching the managed PTY
     markSessionUsed(sessionStorage);
+
+    // Restoring a session makes its saved project and terminal context the state
+    // currently exposed through MCP
+    trySetMcpActiveSessionId(sessionId);
 
     // Re-enter the existing logical session using its persistent identity
     return runManagedShell(sessionId);

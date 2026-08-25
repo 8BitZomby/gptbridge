@@ -11,6 +11,7 @@ Command parseCommand(const std::string& command) {
     if(command == "capture") { return Command::Capture; }
     if(command == "clear") { return Command::Clear; }
     if(command == "init") { return Command::Init; }
+    if(command == "mcp") { return Command::Mcp; }
     if(command == "mcp-server") { return Command::McpServer; }
     if(command == "push") { return Command::Push; }
     if(command == "project") { return Command::Project; }

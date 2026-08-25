@@ -63,6 +63,9 @@ int handleHelpCommand(int argc, char* argv[]) {
         << "  clear\n"
         << "      Clear persistent terminal context.\n"
         << '\n'
+        << "  sync\n"
+        << "      Syncronizes MCP with the logical session attached to this shell\n"
+        << '\n'
         << "Options:\n"
         << "  -h, --help\n"
         << "      Show this help.\n";

@@ -50,6 +50,17 @@ PersistentSessionStorage PersistentSessionStorage::forExplicitSessionId(const st
 
 
 /**
+ * getSessionId()
+ * Returns the logical session identifier represented by this storage object
+ */
+std::string PersistentSessionStorage::getSessionId() const {
+    // Each logical session's directory name is its stable session ID,
+    // for example ~/.gptbridge/sessions/s-0001 -> "s-0001"
+    return sessionDirectory_.filename().string();
+}
+
+
+/**
  * getSessionDirectory()
  * Returns the resolved directory containing persistent files for this session
  */

@@ -54,6 +54,7 @@ add_executable(gptb
     src/main.cpp
     src/McpCommands.cpp
     src/McpServer.cpp
+    src/McpState.cpp
     src/PersistentSessionStorage.cpp
     src/ProjectManager.cpp
     src/ProjectVisibility.cpp

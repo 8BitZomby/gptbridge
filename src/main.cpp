@@ -33,6 +33,7 @@ int main(int argc, char* argv[]) {
             case Command::Clear: return handleClearCommand(argc, argv);
             case Command::Help: return handleHelpCommand(argc, argv);
             case Command::Init: return handleInitCommand(argc, argv);
+            case Command::Mcp: return handleMcpCommand(argc, argv);
             case Command::McpServer: return handleMcpServerCommand(argc, argv);
             case Command::Push: return handlePushCommand(argc, argv);
             case Command::Project: return handleProjectCommand(argc, argv);
