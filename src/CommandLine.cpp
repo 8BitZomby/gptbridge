@@ -6,6 +6,8 @@
  * Converts a top-level CLI command string into the corresponding Command value
  */
 Command parseCommand(const std::string& command) {
+    if(command == "-h") { return Command::Help; }
+    if(command == "--help") { return Command::Help; }
     if(command == "capture") { return Command::Capture; }
     if(command == "clear") { return Command::Clear; }
     if(command == "init") { return Command::Init; }

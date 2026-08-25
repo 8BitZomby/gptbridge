@@ -7,6 +7,7 @@
 enum class Command {
     Capture,
     Clear,
+    Help,
     Init,
     McpServer,
     Push,

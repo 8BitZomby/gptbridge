@@ -1,5 +1,6 @@
 #include "CommandLine.hpp"
 #include "ContextCommands.hpp"
+#include "HelpCommand.hpp"
 #include "McpCommands.hpp"
 #include "ProjectCommands.hpp"
 #include "SessionCommands.hpp"
@@ -27,6 +28,7 @@ int main(int argc, char* argv[]) {
         switch(command) {
             case Command::Capture: return handleCaptureCommand(argc, argv);
             case Command::Clear: return handleClearCommand(argc, argv);
+            case Command::Help: return handleHelpCommand(argc, argv);
             case Command::Init: return handleInitProjectCommand(argc, argv);
             case Command::McpServer: return handleMcpServerCommand(argc, argv);
             case Command::Push: return handlePushCommand(argc, argv);
