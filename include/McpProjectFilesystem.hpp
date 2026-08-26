@@ -39,4 +39,14 @@ McpProjectFileResult searchMcpProjectFiles(
 );
 
 
+/**
+ * listMcpProjectFiles()
+ * Lists MCP-visible project files while enforcing project containment,
+ * symlink, .gptignore, and visibility policies.
+ */
+McpProjectFileResult listMcpProjectFiles(
+    const std::filesystem::path& projectRoot
+);
+
+
 #endif

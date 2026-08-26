@@ -4,10 +4,12 @@
 #include "ProjectVisibility.hpp"
 #include "SensitivePath.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 
 /**
@@ -369,5 +371,154 @@ McpProjectFileResult searchMcpProjectFiles(
     return {
         true,
         text.str()
+    };
+}
+
+
+/**
+ * listMcpProjectFiles()
+ * Lists readable project files through the same filesystem policy used by the
+ * MCP list_project_files tool.
+ */
+McpProjectFileResult listMcpProjectFiles(
+        const std::filesystem::path& projectRoot) {
+
+    // Resolve the registered project root before traversal so containment
+    // checks compare every entry against one canonical filesystem location.
+    std::error_code projectPathError;
+    const std::filesystem::path canonicalProjectRoot =
+        std::filesystem::canonical(
+            projectRoot,
+            projectPathError
+        );
+
+    if(projectPathError) {
+        return {
+            false,
+            "Failed to resolve active project path"
+        };
+    }
+
+    // Load project-local ignore rules once for the complete listing operation.
+    const GptIgnore ignoreRules(canonicalProjectRoot);
+
+    std::vector<std::string> files;
+
+    std::error_code iteratorError;
+
+    std::filesystem::recursive_directory_iterator itr(
+        canonicalProjectRoot,
+        std::filesystem::directory_options::skip_permission_denied,
+        iteratorError
+    );
+
+    const std::filesystem::recursive_directory_iterator end;
+
+    if(iteratorError) {
+        return {
+            false,
+            "Failed to enumerate active project files"
+        };
+    }
+
+    while(itr != end) {
+        const std::filesystem::path entryPath =
+            itr->path();
+
+        // Preserve the directory entry's project-relative alias path rather
+        // than replacing it with a resolved symlink target.
+        const std::filesystem::path relativePath =
+            entryPath.lexically_relative(canonicalProjectRoot);
+
+        if(!relativePath.empty()) {
+            std::error_code typeError;
+            const bool isDirectory =
+                itr->is_directory(typeError);
+
+            if(!typeError && isDirectory) {
+                const std::string directoryName =
+                    entryPath.filename().string();
+
+                // Do not descend into ignored, sensitive, generated, or cache
+                // directories.
+                if(ignoreRules.isIgnored(relativePath, true) ||
+                   isSensitiveProjectPath(relativePath) ||
+                   directoryName == "build" ||
+                   directoryName == ".cache") {
+
+                    itr.disable_recursion_pending();
+                }
+            }
+
+            else if(!typeError) {
+                typeError.clear();
+
+                const bool isRegularFile =
+                    itr->is_regular_file(typeError);
+
+                if(!typeError && isRegularFile) {
+                    // Resolve file symlinks before exposing the entry. A file
+                    // alias inside the project may point outside the project.
+                    std::error_code resolvedPathError;
+                    const std::filesystem::path resolvedEntryPath =
+                        std::filesystem::weakly_canonical(
+                            entryPath,
+                            resolvedPathError
+                        );
+
+                    if(!resolvedPathError) {
+                        std::error_code resolvedRelativeError;
+                        const std::filesystem::path resolvedRelativePath =
+                            std::filesystem::relative(
+                                resolvedEntryPath,
+                                canonicalProjectRoot,
+                                resolvedRelativeError
+                            );
+
+                        // Both the visible alias and resolved target must remain
+                        // inside the project and satisfy visibility policy.
+                        if(!resolvedRelativeError &&
+                           !resolvedRelativePath.empty() &&
+                           *resolvedRelativePath.begin() != ".." &&
+                           entryPath.filename() != ".DS_Store" &&
+                           !ignoreRules.isIgnored(relativePath) &&
+                           !ignoreRules.isIgnored(resolvedRelativePath) &&
+                           isProjectPathVisible(relativePath) &&
+                           isProjectPathVisible(resolvedRelativePath)) {
+
+                            files.push_back(
+                                relativePath.generic_string()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        iteratorError.clear();
+        itr.increment(iteratorError);
+
+        // Preserve entries already collected if traversal later encounters a
+        // filesystem error.
+        if(iteratorError) {
+            break;
+        }
+    }
+
+    // Keep listing output stable between requests.
+    std::sort(
+        files.begin(),
+        files.end()
+    );
+
+    std::string text;
+
+    for(const std::string& file : files) {
+        text += file + '\n';
+    }
+
+    return {
+        true,
+        text
     };
 }

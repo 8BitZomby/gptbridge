@@ -482,160 +482,57 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
     // LIST PROJECT FILES
     // list_project_files returns the files available in the active project
     if(toolName == "list_project_files") {
-        // Try to determine which persistent gptbridge session storage this MCP server should use
-        const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
+        // Resolve the persistent gptbridge session this MCP server should use.
+        const std::optional<PersistentSessionStorage> sessionStorage =
+            tryResolvePersistentSessionStorageForMcp();
 
         if(!sessionStorage.has_value()) {
-            sendToolError(message["id"], "MCP session storage could not be resolved");
+            sendToolError(
+                message["id"],
+                "MCP session storage could not be resolved"
+            );
             return;
         }
 
-        // The optional contains a PersistentSessionStorage object, so access it directly
-        const PersistentSessionStorage& persistentSessionStorage = sessionStorage.value();
+        const PersistentSessionStorage& persistentSessionStorage =
+            sessionStorage.value();
 
-        // Read the active project from the selected gptbridge session
-        const std::string activeProject = getActiveProject(persistentSessionStorage);
+        // Listing uses the project currently active in the selected logical session.
+        const std::string activeProject =
+            getActiveProject(persistentSessionStorage);
 
         if(activeProject.empty() || !projectExists(activeProject)) {
-            sendToolError(message["id"], "No valid active gptbridge project");
+            sendToolError(
+                message["id"],
+                "No valid active gptbridge project"
+            );
             return;
         }
 
-        // Resolve the registered project root before scanning its contents so all
-        // containment checks compare against one canonical filesystem location.
-        std::error_code projectPathError;
-        const std::filesystem::path projectPath =
-            std::filesystem::canonical(
-                getProjectPath(activeProject),
-                projectPathError
+        // Run project traversal independently from MCP transport.
+        const McpProjectFileResult listResult =
+            listMcpProjectFiles(
+                getProjectPath(activeProject)
             );
 
-        if(projectPathError) {
-            sendToolError(message["id"], "Failed to resolve active project path");
+        if(!listResult.success) {
+            sendToolError(
+                message["id"],
+                listResult.text
+            );
             return;
         }
 
-        // Parse project-local ignore rules once for this complete listing operation
-        const GptIgnore ignoreRules(projectPath);
-
-        std::vector<std::string> files;
-
-        std::error_code iteratorError;
-
-        std::filesystem::recursive_directory_iterator itr(
-            projectPath,
-            std::filesystem::directory_options::skip_permission_denied,
-            iteratorError
-        );
-
-        const std::filesystem::recursive_directory_iterator end;
-
-        if(iteratorError) {
-            sendToolError(message["id"], "Failed to enumerate active project files");
-            return;
-        }
-
-        while(itr != end) {
-            const std::filesystem::path entryPath = itr->path();
-
-            // Preserve the directory entry's own project-relative path rather than
-            // resolving symlinks. The resolved target is checked separately below.
-            const std::filesystem::path relativePath = entryPath.lexically_relative(projectPath);
-
-            if(!relativePath.empty()) {
-                // Query entry type through error-code overloads so a file that disappears
-                // during traversal does not abort the complete MCP request.
-                std::error_code typeError;
-                const bool isDirectory = itr->is_directory(typeError);
-
-                if(!typeError && isDirectory) {
-                    const std::string directoryName = entryPath.filename().string();
-
-                    // Do not descend into ignored, sensitive, generated, or cache directories.
-                    // File-level visibility checks remain in place as a second layer.
-                    if(ignoreRules.isIgnored(relativePath, true) ||
-                        isSensitiveProjectPath(relativePath) ||
-                        directoryName == "build" ||
-                        directoryName == ".cache") {
-
-                        itr.disable_recursion_pending();
-                    }
-                }
-
-                else if(!typeError) {
-                    typeError.clear();
-                    const bool isRegularFile =
-                        itr->is_regular_file(typeError);
-
-                    if(!typeError && isRegularFile) {
-                        // Resolve the file target before exposing it. A file symlink may point
-                        // outside the project even though the symlink itself is inside it.
-                        std::error_code resolvedPathError;
-                        const std::filesystem::path resolvedEntryPath =
-                            std::filesystem::weakly_canonical(
-                                entryPath,
-                                resolvedPathError
-                            );
-
-                        if(!resolvedPathError) {
-                            std::error_code resolvedRelativeError;
-                            const std::filesystem::path resolvedRelativePath =
-                                std::filesystem::relative(
-                                    resolvedEntryPath,
-                                    projectPath,
-                                    resolvedRelativeError
-                                );
-
-                            // Both the visible alias path and the resolved target must remain
-                            // inside project policy. This prevents a symlink from exposing an
-                            // external or otherwise hidden file through a harmless-looking name.
-                            if(!resolvedRelativeError &&
-                               !resolvedRelativePath.empty() &&
-                               *resolvedRelativePath.begin() != ".." &&
-                               entryPath.filename() != ".DS_Store" &&
-                               !ignoreRules.isIgnored(relativePath) &&
-                               !ignoreRules.isIgnored(resolvedRelativePath) &&
-                               isProjectPathVisible(relativePath) &&
-                               isProjectPathVisible(resolvedRelativePath)) {
-
-                                files.push_back(relativePath.generic_string());
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Advance using the non-throwing overload. If traversal itself can no
-            // longer advance, return the entries collected successfully so far rather
-            // than risking a repeated entry or terminating the MCP server.
-            iteratorError.clear();
-            itr.increment(iteratorError);
-
-            if(iteratorError) {
-                break;
-            }
-        }
-
-        // Keep the file listing stable between requests
-        std::sort(files.begin(), files.end());
-        std::string text;
-
-        // Put one project-relative file path on each line
-        for(const std::string& file : files) {
-            text += file + '\n';
-        }
-
-        // Return the file listing as an MCP text content block
+        // Return the project-relative file listing as MCP text.
         const nlohmann::json result = {
             {"content", nlohmann::json::array({
                 {
                     {"type", "text"},
-                    {"text", text}
+                    {"text", listResult.text}
                 }
             })}
         };
 
-        // Match the response to the tools/call request that produced it
         const nlohmann::json response = {
             {"jsonrpc", "2.0"},
             {"id", message["id"]},
@@ -646,6 +543,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         std::cout.flush();
         return;
     }
+
 
     // SEARCH PROJECT FILES
     // search_project_files finds matching text inside readable active-project files

@@ -812,6 +812,209 @@ namespace {
             "search should not return matches beyond the 50-result limit"
         );
     }
+
+
+    /**
+     * testMcpProjectFileListings()
+     * Verifies project listing visibility, ignore rules, directory pruning,
+     * symlink containment, alias preservation, and stable sorted output.
+     */
+    void testMcpProjectFileListings() {
+        TemporaryProject project;
+
+        project.writeFile(
+            "src/zeta.cpp",
+            "int zeta = 1;\n"
+        );
+
+        project.writeFile(
+            "src/alpha.cpp",
+            "int alpha = 1;\n"
+        );
+
+        project.writeFile(
+            "ignored.cpp",
+            "int ignored = 1;\n"
+        );
+
+        project.writeFile(
+            "ignored-dir/hidden.cpp",
+            "int hidden = 1;\n"
+        );
+
+        project.writeFile(
+            ".git/config.cpp",
+            "int gitConfig = 1;\n"
+        );
+
+        project.writeFile(
+            "build/generated.cpp",
+            "int generated = 1;\n"
+        );
+
+        project.writeFile(
+            ".cache/cached.cpp",
+            "int cached = 1;\n"
+        );
+
+        project.writeFile(
+            "notes.txt",
+            "not MCP visible\n"
+        );
+
+        project.writeFile(
+            "internal-target.cpp",
+            "int internalTarget = 7;\n"
+        );
+
+        project.writeGptIgnore(
+            "ignored.cpp\n"
+            "ignored-dir/\n"
+        );
+
+        std::error_code internalSymlinkError;
+        std::filesystem::create_symlink(
+            project.path() / "internal-target.cpp",
+            project.path() / "internal-link.cpp",
+            internalSymlinkError
+        );
+
+        expectFalse(
+            static_cast<bool>(internalSymlinkError),
+            "internal listing symlink fixture should be created successfully"
+        );
+
+        const std::filesystem::path externalPath =
+            project.path().parent_path() /
+            (project.path().filename().string() + "-list-outside.cpp");
+
+        {
+            std::ofstream externalOutput(externalPath);
+
+            if(!externalOutput) {
+                throw std::runtime_error(
+                    "Failed to create external listing symlink fixture"
+                );
+            }
+
+            externalOutput << "int outside = 9;\n";
+        }
+
+        std::error_code externalSymlinkError;
+        std::filesystem::create_symlink(
+            externalPath,
+            project.path() / "external-link.cpp",
+            externalSymlinkError
+        );
+
+        expectFalse(
+            static_cast<bool>(externalSymlinkError),
+            "external listing symlink fixture should be created successfully"
+        );
+
+        const McpProjectFileResult listing =
+            listMcpProjectFiles(
+                project.path()
+            );
+
+        expectTrue(
+            listing.success,
+            "ordinary project listings should succeed"
+        );
+
+        expectTrue(
+            listing.text.find(
+                "src/alpha.cpp\n"
+            ) != std::string::npos,
+            "visible source files should appear in project listings"
+        );
+
+        expectTrue(
+            listing.text.find(
+                "src/zeta.cpp\n"
+            ) != std::string::npos,
+            "multiple visible source files should appear in project listings"
+        );
+
+        expectTrue(
+            listing.text.find(
+                "ignored.cpp"
+            ) == std::string::npos,
+            ".gptignore files should not appear in project listings"
+        );
+
+        expectTrue(
+            listing.text.find(
+                "ignored-dir/hidden.cpp"
+            ) == std::string::npos,
+            ".gptignore directories should be pruned from project listings"
+        );
+
+        expectTrue(
+            listing.text.find(
+                ".git/config.cpp"
+            ) == std::string::npos,
+            "sensitive directories should be pruned from project listings"
+        );
+
+        expectTrue(
+            listing.text.find(
+                "build/generated.cpp"
+            ) == std::string::npos,
+            "build directories should be pruned from project listings"
+        );
+
+        expectTrue(
+            listing.text.find(
+                ".cache/cached.cpp"
+            ) == std::string::npos,
+            "cache directories should be pruned from project listings"
+        );
+
+        expectTrue(
+            listing.text.find(
+                "notes.txt"
+            ) == std::string::npos,
+            "files outside the MCP visibility policy should not be listed"
+        );
+
+        if(!internalSymlinkError) {
+            expectTrue(
+                listing.text.find(
+                    "internal-link.cpp\n"
+                ) != std::string::npos,
+                "internal file symlinks should be listed using their alias path"
+            );
+        }
+
+        if(!externalSymlinkError) {
+            expectTrue(
+                listing.text.find(
+                    "external-link.cpp"
+                ) == std::string::npos,
+                "symlinks resolving outside the project should not be listed"
+            );
+        }
+
+        const std::size_t alphaPosition =
+            listing.text.find("src/alpha.cpp\n");
+
+        const std::size_t zetaPosition =
+            listing.text.find("src/zeta.cpp\n");
+
+        expectTrue(
+            alphaPosition != std::string::npos &&
+            zetaPosition != std::string::npos &&
+            alphaPosition < zetaPosition,
+            "project listings should be sorted lexicographically"
+        );
+
+        std::error_code externalRemovalError;
+        std::filesystem::remove(
+            externalPath,
+            externalRemovalError
+        );
+    }
 }
 
 
@@ -822,6 +1025,7 @@ int main() {
         testGptIgnorePatterns();
         testMcpProjectFileReads();
         testMcpProjectFileSearches();
+        testMcpProjectFileListings();
     }
     catch(const std::exception& error) {
         std::cerr << "ERROR: " << error.what() << '\n';
