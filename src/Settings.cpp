@@ -75,6 +75,42 @@ namespace {
 
 
 /**
+ * ensureSettingsFile()
+ * Creates ~/.gptbridge/settings.json with the default settings when the file
+ * does not already exist
+ */
+void ensureSettingsFile() {
+    const std::filesystem::path settingsPath = getSettingsPath();
+
+    // Existing settings belong to the user and must not be overwritten during
+    // later project initialization
+    if(std::filesystem::exists(settingsPath)) {
+        return;
+    }
+
+    ensureStorageRoot();
+    const nlohmann::json defaultSettings = {
+        {"push_mode", "append"}
+    };
+
+    // Create the file with owner-read/write permissions before writing the
+    // initial settings object
+    ensurePrivateFile(settingsPath);
+    std::ofstream output(settingsPath);
+
+    if(!output) {
+        throw std::runtime_error("Failed to open settings file for writing");
+    }
+
+    output << defaultSettings.dump(4) << '\n';
+
+    if(!output) {
+        throw std::runtime_error("Failed to write settings file");
+    }
+}
+
+
+/**
  * getPushMode()
  * Loads the globally configured push mode.
  */

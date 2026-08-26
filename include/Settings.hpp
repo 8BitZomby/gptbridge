@@ -14,6 +14,14 @@ enum class PushMode {
 
 
 /**
+ * ensureSettingsFile()
+ * Creates the global settings file with default values when it does not yet
+ * exist. Existing settings are preserved unchanged
+ */
+void ensureSettingsFile();
+
+
+/**
  * getPushMode()
  * Returns the globally configured push mode.
  * Append is used when no explicit setting has been saved yet.
