@@ -1,0 +1,15 @@
+#ifndef GPTB_VERSION_HPP
+#define GPTB_VERSION_HPP
+
+#include <string_view>
+
+
+namespace Version {
+
+    // Semantic version supplied by the CMake project declaration.
+    inline constexpr std::string_view value = "@PROJECT_VERSION@";
+
+}
+
+
+#endif

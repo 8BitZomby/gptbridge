@@ -8,6 +8,8 @@
 Command parseCommand(const std::string& command) {
     if(command == "-h") { return Command::Help; }
     if(command == "--help") { return Command::Help; }
+    if(command == "-V") { return Command::Version; }
+    if(command == "--version") { return Command::Version; }
     if(command == "capture") { return Command::Capture; }
     if(command == "clear") { return Command::Clear; }
     if(command == "init") { return Command::Init; }
@@ -23,6 +25,7 @@ Command parseCommand(const std::string& command) {
     if(command == "show") { return Command::Show; }
     if(command == "status") { return Command::Status; }
     if(command == "use") { return Command::Use; }
+
     return Command::Unknown;
 
 }
