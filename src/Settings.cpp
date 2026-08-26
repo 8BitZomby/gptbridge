@@ -93,20 +93,12 @@ void ensureSettingsFile() {
         {"push_mode", "append"}
     };
 
-    // Create the file with owner-read/write permissions before writing the
-    // initial settings object
-    ensurePrivateFile(settingsPath);
-    std::ofstream output(settingsPath);
-
-    if(!output) {
-        throw std::runtime_error("Failed to open settings file for writing");
-    }
-
-    output << defaultSettings.dump(4) << '\n';
-
-    if(!output) {
-        throw std::runtime_error("Failed to write settings file");
-    }
+    // Commit the initial settings only after the complete JSON has been written
+    // successfully to a private temporary file.
+    writePrivateFileAtomically(
+        settingsPath,
+        defaultSettings.dump(4) + '\n'
+    );
 }
 
 
@@ -157,19 +149,10 @@ void setPushMode(PushMode mode) {
 
     const std::filesystem::path settingsPath = getSettingsPath();
 
-    // Create or repair the file with owner-read/write permissions before
-    // replacing its contents.
-    ensurePrivateFile(settingsPath);
-
-    std::ofstream output(settingsPath);
-
-    if(!output) {
-        throw std::runtime_error("Failed to open settings file for writing");
-    }
-
-    output << settings.dump(4) << '\n';
-
-    if(!output) {
-        throw std::runtime_error("Failed to write settings file");
-    }
+    // Replace the committed settings only after the complete updated JSON has
+    // been written successfully to a private temporary file.
+    writePrivateFileAtomically(
+        settingsPath,
+        settings.dump(4) + '\n'
+    );
 }

@@ -79,22 +79,12 @@ std::string createSession() {
     const std::filesystem::path statePath = sessionStorage.getSessionStatePath();
 
     try {
-        // Create the state file with owner-only permissions
-        ensurePrivateFile(statePath);
-
-        // Initialize the session with an empty state object. Session properties
-        // such as active_project can be added independently afterward
-        std::ofstream output(statePath);
-
-        if(!output) {
-            throw std::runtime_error("Failed to open new session file for writing");
-        }
-
-        output << nlohmann::json::object().dump(4) << '\n';
-
-        if(!output) {
-            throw std::runtime_error("Failed to write new session file");
-        }
+        // Initialize the session with an empty state object only after the complete
+        // JSON has been written successfully to a private temporary file.
+        writePrivateFileAtomically(
+            statePath,
+            nlohmann::json::object().dump(4) + '\n'
+        );
     }
     catch(...) {
         // The ID has not been returned to a caller yet, so a failed
@@ -413,23 +403,12 @@ void setActiveProject(const PersistentSessionStorage& sessionStorage, const std:
     // Record which registered project is active for this session
     session["active_project"] = projectName;
 
-    // Create or repair the state file with owner-only permissions before writing
-    ensurePrivateFile(sessionPath);
-
-    std::ofstream output(sessionPath);
-
-    // Make sure the updated session state can actually be written to disk
-    if(!output) {
-        throw std::runtime_error("Failed to open session file for writing");
-    }
-
-    // Write formatted JSON so session files remain easy to inspect manually
-    output << session.dump(4) << '\n';
-
-    // Do not update MCP state unless the session state write actually succeeded
-    if(!output) {
-        throw std::runtime_error("Failed to write session file");
-    }
+    // Replace the committed session state only after the complete updated JSON
+    // has been written successfully.
+    writePrivateFileAtomically(
+        sessionPath,
+        session.dump(4) + '\n'
+    );
 
     // Changing a session's active project also makes that logical session the
     // current MCP target so connected clients follow the user's active work
@@ -472,20 +451,12 @@ void markSessionUsed(const PersistentSessionStorage& sessionStorage) {
     // directly without depending on the user's local timezone
     session["last_used_at"] = currentTimestampUtc();
 
-    // Preserve the same owner-only permissions used by other session state
-    ensurePrivateFile(sessionPath);
-
-    std::ofstream output(sessionPath);
-
-    if(!output) {
-        throw std::runtime_error("Failed to open session file for writing");
-    }
-
-    output << session.dump(4) << '\n';
-
-    if(!output) {
-        throw std::runtime_error("Failed to write session file");
-    }
+    // Replace the committed session state only after the updated timestamp has
+    // been written successfully.
+    writePrivateFileAtomically(
+        sessionPath,
+        session.dump(4) + '\n'
+    );
 }
 
 

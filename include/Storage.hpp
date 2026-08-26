@@ -29,6 +29,14 @@ void ensurePrivateFile(const std::filesystem::path& path);
 
 
 /**
+ * writePrivateFileAtomically()
+ * Replaces a persistent file only after its complete new contents have been
+ * written and synchronized to a private temporary file in the same directory
+ */
+void writePrivateFileAtomically(const std::filesystem::path& path, const std::string& contents);
+
+
+/**
  * ensureStorageRoot()
  * Creates the global storage directory if it does not already exist
  */

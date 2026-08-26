@@ -2,6 +2,7 @@
 
 #include "SessionId.hpp"
 
+#include <cerrno>
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
@@ -16,6 +17,7 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
 
 
 /**
@@ -269,6 +271,122 @@ void ensurePrivateFile(const std::filesystem::path& path) {
 
 
 /**
+ * writePrivateFileAtomically()
+ * Writes complete replacement contents to a private temporary file in the
+ * destination directory before atomically renaming it over the committed file.
+ */
+void writePrivateFileAtomically(const std::filesystem::path& path, const std::string& contents) {
+
+    // rename() is atomic only when the temporary and destination files reside
+    // on the same filesystem, so create the temporary file beside its target.
+    const std::filesystem::path parentPath = path.parent_path();
+
+    if(parentPath.empty()) {
+        throw std::runtime_error("Atomic private file write requires a parent directory");
+    }
+
+    ensurePrivateDirectory(parentPath);
+
+    // mkstemp() replaces the trailing XXXXXX with a unique value and opens the
+    // file exclusively, avoiding collisions between concurrent writers.
+    std::string temporaryTemplate =
+        (parentPath / (path.filename().string() + ".tmp.XXXXXX")).string();
+
+    std::vector<char> temporaryBuffer(
+        temporaryTemplate.begin(),
+        temporaryTemplate.end()
+    );
+
+    temporaryBuffer.push_back('\0');
+
+    const int temporaryDescriptor =
+        ::mkstemp(temporaryBuffer.data());
+
+    if(temporaryDescriptor == -1) {
+        throw std::runtime_error("Failed to create temporary private file");
+    }
+
+    const std::filesystem::path temporaryPath(
+        temporaryBuffer.data()
+    );
+
+    bool descriptorOpen = true;
+
+    try {
+        // mkstemp() normally creates mode 0600, but enforce the storage policy
+        // explicitly rather than depending on platform defaults or umask.
+        if(::fchmod(
+                temporaryDescriptor,
+                S_IRUSR | S_IWUSR
+            ) == -1) {
+
+            throw std::runtime_error("Failed to secure temporary private file");
+        }
+
+        std::size_t totalBytesWritten = 0;
+
+        // write() is allowed to complete only part of the requested buffer, so
+        // continue until every byte has reached the temporary file.
+        while(totalBytesWritten < contents.size()) {
+            const ssize_t bytesWritten =
+                ::write(
+                    temporaryDescriptor,
+                    contents.data() + totalBytesWritten,
+                    contents.size() - totalBytesWritten
+                );
+
+            if(bytesWritten == -1) {
+                if(errno == EINTR) {
+                    continue;
+                }
+                throw std::runtime_error("Failed to write temporary private file");
+            }
+
+            if(bytesWritten == 0) {
+                throw std::runtime_error("Failed to write temporary private file");
+            }
+
+            totalBytesWritten +=
+                static_cast<std::size_t>(bytesWritten);
+        }
+
+        // Commit the complete replacement contents to storage before exposing
+        // the temporary file as the destination path.
+        if(::fsync(temporaryDescriptor) == -1) {
+            throw std::runtime_error("Failed to sync temporary private file");
+        }
+
+        if(::close(temporaryDescriptor) == -1) {
+            descriptorOpen = false;
+            throw std::runtime_error("Failed to close temporary private file");
+        }
+
+        descriptorOpen = false;
+
+        // POSIX rename replaces an existing destination atomically when both
+        // paths are on the same filesystem.
+        if(::rename(temporaryPath.c_str(), path.c_str()) == -1) {
+            throw std::runtime_error("Failed to atomically replace private file");
+        }
+    }
+    catch(...) {
+        if(descriptorOpen) {
+            ::close(temporaryDescriptor);
+        }
+
+        // A failed write must never leave an incomplete temporary file behind.
+        std::error_code removalError;
+        std::filesystem::remove(
+            temporaryPath,
+            removalError
+        );
+
+        throw;
+    }
+}
+
+
+/**
  * ensureStorageRoot()
  * Creates the global storage directory if it does not already exist.
  */
@@ -352,17 +470,12 @@ bool removeProject(const std::string& name) {
 
     const std::filesystem::path registryPath = getStorageRoot() / "projects.json";
 
-    // Ensure the project registry exists with owner-only permissions
-    ensurePrivateFile(registryPath);
-
-    // Rewrite the registry with the updated project set
-    std::ofstream output(registryPath);
-
-    if(!output) {
-        throw std::runtime_error("Failed to open projects.json for writing");
-    }
-    // Keep the JSON human-readable for manual inspection and debugging
-    output << registry.dump(4) << '\n';
+    // Replace the committed registry only after the complete updated JSON has
+    // been written successfully.
+    writePrivateFileAtomically(
+        registryPath,
+        registry.dump(4) + '\n'
+    );
 
     return true;
 }
@@ -385,15 +498,10 @@ void saveProject(const std::string& name, const std::filesystem::path& path) {
     // Store paths as strings because JSON has no filesystem path type
     registry["projects"][name]["path"] = path.string();
 
-    // Ensure the project registry exists with owner-only permissions
-    ensurePrivateFile(registryPath);
-
-    std::ofstream output(registryPath);
-
-    if(!output) {
-        throw std::runtime_error("Failed to open projects.json for writing");
-    }
-
-    // Indent by four spaces so the registry remains easy to inspect manually
-    output << registry.dump(4) << '\n';
+    // Keep the registry human-readable while replacing the committed file only
+    // after the complete updated JSON has been written successfully.
+    writePrivateFileAtomically(
+        registryPath,
+        registry.dump(4) + '\n'
+    );
 }
