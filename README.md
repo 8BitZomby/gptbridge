@@ -1,4 +1,3 @@
-cat > README.md <<'EOF'
 # gptbridge
 
 `gptbridge` is a C++ terminal integration tool that captures shell interactions
@@ -617,4 +616,3 @@ integration entry points rather than normal user-facing workflow commands.
 | --- | --- |
 | `-h`, `--help` | Display command-line help. |
 | `-V`, `--version` | Display the current gptbridge version. |
-EOF
