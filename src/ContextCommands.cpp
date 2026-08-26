@@ -1,5 +1,6 @@
 #include "ContextCommands.hpp"
 #include "PersistentSessionStorage.hpp"
+#include "Settings.hpp"
 #include "TerminalContext.hpp"
 #include "TemporaryInteractionHistory.hpp"
 #include "TerminalSecretDetector.hpp"
@@ -76,15 +77,34 @@ namespace {
  * session history into the persistent terminal context
  */
 int handlePushCommand(int argc, char* argv[]) {
-    // "gptb push" pushes the most recent terminal interaction
-    // "gptb push <count>" pushes the specified number of recent interactions
+    // "gptb push" pushes the most recent terminal interaction using the saved mode.
+    // "gptb push <count>" pushes the requested number using the saved mode.
+    // "gptb push append|replace" changes the persistent global push mode.
     if(argc != 2 && argc != 3) {
-        std::cout << "Usage: gptb push [count]\n";
+        std::cout << "Usage: gptb push [count|append|replace]\n";
         return 1;
     }
 
-    // Push must run inside a gptbridge-managed terminal session so it can
-    // locate the temporary history belonging to the active session
+    // A mode-setting command changes global configuration and therefore does not
+    // require the caller to be inside a managed terminal session.
+    if(argc == 3) {
+        const std::string argument = argv[2];
+
+        if(argument == "append") {
+            setPushMode(PushMode::Append);
+            std::cout << "Push mode: append\n";
+            return 0;
+        }
+
+        if(argument == "replace") {
+            setPushMode(PushMode::Replace);
+            std::cout << "Push mode: replace\n";
+            return 0;
+        }
+    }
+
+    // Actually pushing terminal history requires a managed shell because the
+    // temporary interaction history belongs to the current live capture.
     const char* captureId = std::getenv("GPTB_SESSION_NONCE");
 
     if(captureId == nullptr || *captureId == '\0') {
@@ -92,10 +112,10 @@ int handlePushCommand(int argc, char* argv[]) {
         return 1;
     }
 
-    // With no count supplied, push only the most recent interaction
+    // With no count supplied, push only the most recent interaction.
     std::size_t pushCount = 1;
 
-    // Validate the optional count before reading the temporary history
+    // An argument that was not a recognized mode must be a positive count.
     if(argc == 3) {
         if(!parsePositiveCount(argv[2], pushCount)) {
             std::cout << "Push count must be a positive integer\n";
@@ -160,10 +180,17 @@ int handlePushCommand(int argc, char* argv[]) {
         }
     }
 
-    // Persist the selected terminal I/O as ChatGPT terminal context
-    // Append/replace policy will be configurable separately
+    // Persist the selected terminal interactions according to the globally
+    // configured push mode
     TerminalContext terminalContext(PersistentSessionStorage::forCurrentSession());
-    terminalContext.append(selectedInteractions);
+    const PushMode pushMode = getPushMode();
+
+    if(pushMode == PushMode::Append) {
+        terminalContext.append(selectedInteractions);
+    }
+    else {
+        terminalContext.replace(selectedInteractions);
+    }
 
     std::cout << "Pushed " << pushCount << " terminal interaction";
 

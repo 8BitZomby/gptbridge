@@ -4,7 +4,8 @@
 
 /**
  * handlePushCommand()
- * Handles terminal-I/O selection and push-policy arguments
+ * Pushes selected terminal interactions using the configured mode
+ * or changes the persistent append/replace mode
  */
 int handlePushCommand(int argc, char* argv[]);
 

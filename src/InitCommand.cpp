@@ -2,6 +2,7 @@
 #include "PersistentSessionStorage.hpp"
 #include "ProjectManager.hpp"
 #include "SessionManager.hpp"
+#include "Settings.hpp"
 #include "ShellCommands.hpp"
 #include "Storage.hpp"
 
@@ -47,6 +48,9 @@ int handleInitCommand(int argc, char* argv[]) {
         std::cout << "Usage: gptb init <path> <project-name>\n";
         return 1;
     }
+
+    // Ensure global gptbridge settings exist before creating project/session state
+    ensureSettingsFile();
 
     // Normalize the supplied project directory into an absolute path.
     const std::filesystem::path projectPath =
