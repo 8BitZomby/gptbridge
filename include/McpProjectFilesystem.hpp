@@ -27,4 +27,16 @@ McpProjectFileResult readMcpProjectFile(
 );
 
 
+/**
+ * searchMcpProjectFiles()
+ * Searches MCP-visible project files for exact case-sensitive text while
+ * enforcing project containment, symlink, .gptignore, visibility, and
+ * file-size policies.
+ */
+McpProjectFileResult searchMcpProjectFiles(
+    const std::filesystem::path& projectRoot,
+    const std::string& query
+);
+
+
 #endif

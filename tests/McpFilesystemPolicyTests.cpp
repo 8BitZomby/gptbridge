@@ -567,6 +567,251 @@ namespace {
             "oversized reads should report the direct-read size limit"
         );
     }
+
+
+    /**
+     * testMcpProjectFileSearches()
+     * Verifies project search filtering, symlink containment, size limits, result
+     * formatting, and the maximum-result boundary independently from MCP transport.
+     */
+    void testMcpProjectFileSearches() {
+        TemporaryProject project;
+
+        project.writeFile(
+            "src/first.cpp",
+            "alpha\n"
+            "needle first\n"
+            "omega\n"
+        );
+
+        project.writeFile(
+            "src/second.cpp",
+            "needle second\n"
+        );
+
+        project.writeFile(
+            "ignored.cpp",
+            "needle ignored\n"
+        );
+
+        project.writeFile(
+            ".env",
+            "needle sensitive\n"
+        );
+
+        project.writeFile(
+            "internal-target.cpp",
+            "needle internal\n"
+        );
+
+        project.writeGptIgnore(
+            "ignored.cpp\n"
+        );
+
+        const McpProjectFileResult normalSearch =
+            searchMcpProjectFiles(
+                project.path(),
+                "needle"
+            );
+
+        expectTrue(
+            normalSearch.success,
+            "ordinary project searches should succeed"
+        );
+
+        expectTrue(
+            normalSearch.text.find(
+                "src/first.cpp:2: needle first"
+            ) != std::string::npos,
+            "search should report the alias path, line number, and matching line"
+        );
+
+        expectTrue(
+            normalSearch.text.find(
+                "src/second.cpp:1: needle second"
+            ) != std::string::npos,
+            "search should inspect multiple visible project files"
+        );
+
+        expectTrue(
+            normalSearch.text.find("ignored.cpp") == std::string::npos,
+            ".gptignore files should not appear in search results"
+        );
+
+        expectTrue(
+            normalSearch.text.find(".env") == std::string::npos,
+            "sensitive files should not appear in search results"
+        );
+
+        const McpProjectFileResult noMatchSearch =
+            searchMcpProjectFiles(
+                project.path(),
+                "definitely-not-present"
+            );
+
+        expectTrue(
+            noMatchSearch.success,
+            "a search with no matches should still succeed"
+        );
+
+        expectTrue(
+            noMatchSearch.text == "No matches found.",
+            "a search with no matches should report that explicitly"
+        );
+
+        std::error_code internalSymlinkError;
+        std::filesystem::create_symlink(
+            project.path() / "internal-target.cpp",
+            project.path() / "internal-link.cpp",
+            internalSymlinkError
+        );
+
+        expectFalse(
+            static_cast<bool>(internalSymlinkError),
+            "internal search symlink fixture should be created successfully"
+        );
+
+        if(!internalSymlinkError) {
+            const McpProjectFileResult internalSymlinkSearch =
+                searchMcpProjectFiles(
+                    project.path(),
+                    "needle internal"
+                );
+
+            expectTrue(
+                internalSymlinkSearch.success,
+                "searching an internal symlink should succeed"
+            );
+
+            expectTrue(
+                internalSymlinkSearch.text.find(
+                    "internal-link.cpp:1: needle internal"
+                ) != std::string::npos,
+                "search results should preserve an internal symlink's alias path"
+            );
+        }
+
+        const std::filesystem::path externalPath =
+            project.path().parent_path() /
+            (project.path().filename().string() + "-search-outside.cpp");
+
+        {
+            std::ofstream externalOutput(externalPath);
+
+            if(!externalOutput) {
+                throw std::runtime_error(
+                    "Failed to create external search symlink fixture"
+                );
+            }
+
+            externalOutput << "needle external\n";
+        }
+
+        std::error_code externalSymlinkError;
+        std::filesystem::create_symlink(
+            externalPath,
+            project.path() / "external-search-link.cpp",
+            externalSymlinkError
+        );
+
+        expectFalse(
+            static_cast<bool>(externalSymlinkError),
+            "external search symlink fixture should be created successfully"
+        );
+
+        if(!externalSymlinkError) {
+            const McpProjectFileResult externalSymlinkSearch =
+                searchMcpProjectFiles(
+                    project.path(),
+                    "needle external"
+                );
+
+            expectTrue(
+                externalSymlinkSearch.success,
+                "an external symlink should be skipped without failing the search"
+            );
+
+            expectTrue(
+                externalSymlinkSearch.text == "No matches found.",
+                "search must not inspect a symlink target outside the project"
+            );
+        }
+
+        std::error_code externalRemovalError;
+        std::filesystem::remove(
+            externalPath,
+            externalRemovalError
+        );
+
+        constexpr std::uintmax_t oneMiB =
+            1024 * 1024;
+
+        project.writeLargeFile(
+            "oversized.cpp",
+            oneMiB + 1
+        );
+
+        const McpProjectFileResult oversizedSearch =
+            searchMcpProjectFiles(
+                project.path(),
+                "not-in-normal-files"
+            );
+
+        expectTrue(
+            oversizedSearch.success,
+            "oversized files should be skipped without failing the search"
+        );
+
+        expectTrue(
+            oversizedSearch.text.find(
+                "No matches found."
+            ) != std::string::npos,
+            "search should still report no matches when an oversized file is skipped"
+        );
+
+        expectTrue(
+            oversizedSearch.text.find(
+                "1 file was skipped because it exceeds the 1 MiB search limit."
+            ) != std::string::npos,
+            "search should report one skipped oversized file"
+        );
+
+        std::string fiftyOneMatches;
+
+        for(std::size_t index = 0; index < 51; ++index) {
+            fiftyOneMatches += "limit-match\n";
+        }
+
+        project.writeFile(
+            "limit.cpp",
+            fiftyOneMatches
+        );
+
+        const McpProjectFileResult limitedSearch =
+            searchMcpProjectFiles(
+                project.path(),
+                "limit-match"
+            );
+
+        expectTrue(
+            limitedSearch.success,
+            "search should succeed when more than the maximum matches exist"
+        );
+
+        expectTrue(
+            limitedSearch.text.find(
+                "Search stopped after 50 matches."
+            ) != std::string::npos,
+            "search should report when the 50-match result limit is reached"
+        );
+
+        expectTrue(
+            limitedSearch.text.find(
+                "limit.cpp:51:"
+            ) == std::string::npos,
+            "search should not return matches beyond the 50-result limit"
+        );
+    }
 }
 
 
@@ -576,6 +821,7 @@ int main() {
         testProjectVisibility();
         testGptIgnorePatterns();
         testMcpProjectFileReads();
+        testMcpProjectFileSearches();
     }
     catch(const std::exception& error) {
         std::cerr << "ERROR: " << error.what() << '\n';

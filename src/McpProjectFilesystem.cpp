@@ -2,6 +2,7 @@
 
 #include "GptIgnore.hpp"
 #include "ProjectVisibility.hpp"
+#include "SensitivePath.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -171,5 +172,202 @@ McpProjectFileResult readMcpProjectFile(
     return {
         true,
         buffer.str()
+    };
+}
+
+
+/**
+ * searchMcpProjectFiles()
+ * Searches readable project files through the same filesystem policy used by
+ * the MCP search_project_files tool.
+ */
+McpProjectFileResult searchMcpProjectFiles(
+        const std::filesystem::path& projectRoot,
+        const std::string& query) {
+
+    // Resolve the registered project root before traversal so containment
+    // checks compare every entry against one canonical filesystem location.
+    std::error_code projectPathError;
+    const std::filesystem::path canonicalProjectRoot =
+        std::filesystem::canonical(
+            projectRoot,
+            projectPathError
+        );
+
+    if(projectPathError) {
+        return {
+            false,
+            "Failed to resolve active project path"
+        };
+    }
+
+    const GptIgnore ignoreRules(canonicalProjectRoot);
+
+    constexpr std::size_t maxResults = 50;
+    constexpr std::uintmax_t maxFileSize = 1024 * 1024;
+
+    std::size_t resultCount = 0;
+    std::size_t oversizedFileCount = 0;
+    std::ostringstream text;
+
+    // Skip directories that cannot be entered because of filesystem
+    // permissions rather than failing the entire search immediately.
+    std::error_code iteratorError;
+
+    std::filesystem::recursive_directory_iterator itr(
+        canonicalProjectRoot,
+        std::filesystem::directory_options::skip_permission_denied,
+        iteratorError
+    );
+
+    const std::filesystem::recursive_directory_iterator end;
+
+    if(iteratorError) {
+        return {
+            false,
+            "Failed to enumerate active project files"
+        };
+    }
+
+    while(itr != end && resultCount < maxResults) {
+        const std::filesystem::path entryPath = itr->path();
+
+        // Preserve the entry's alias path for filtering and result presentation.
+        // A symlink target is resolved separately below.
+        const std::filesystem::path relativePath =
+            entryPath.lexically_relative(canonicalProjectRoot);
+
+        if(!relativePath.empty()) {
+            std::error_code typeError;
+            const bool isDirectory =
+                itr->is_directory(typeError);
+
+            if(!typeError && isDirectory) {
+                const std::string directoryName =
+                    entryPath.filename().string();
+
+                // Do not descend into generated, cache, sensitive, or ignored
+                // directories.
+                if(directoryName == "build" ||
+                   directoryName == ".cache" ||
+                   isSensitiveProjectPath(relativePath) ||
+                   ignoreRules.isIgnored(relativePath, true)) {
+
+                    itr.disable_recursion_pending();
+                }
+            }
+
+            else if(!typeError) {
+                typeError.clear();
+
+                const bool isRegularFile =
+                    itr->is_regular_file(typeError);
+
+                if(!typeError && isRegularFile) {
+                    // Resolve file symlinks before searching their contents.
+                    std::error_code resolvedPathError;
+                    const std::filesystem::path resolvedEntryPath =
+                        std::filesystem::weakly_canonical(
+                            entryPath,
+                            resolvedPathError
+                        );
+
+                    if(!resolvedPathError) {
+                        std::error_code resolvedRelativeError;
+                        const std::filesystem::path resolvedRelativePath =
+                            std::filesystem::relative(
+                                resolvedEntryPath,
+                                canonicalProjectRoot,
+                                resolvedRelativeError
+                            );
+
+                        // Both the visible alias and resolved target must remain
+                        // inside the project and satisfy project visibility policy.
+                        if(!resolvedRelativeError &&
+                           !resolvedRelativePath.empty() &&
+                           *resolvedRelativePath.begin() != ".." &&
+                           !ignoreRules.isIgnored(relativePath) &&
+                           !ignoreRules.isIgnored(resolvedRelativePath) &&
+                           isProjectPathVisible(relativePath) &&
+                           isProjectPathVisible(resolvedRelativePath)) {
+
+                            std::error_code fileSizeError;
+                            const std::uintmax_t fileSize =
+                                std::filesystem::file_size(
+                                    resolvedEntryPath,
+                                    fileSizeError
+                                );
+
+                            if(!fileSizeError) {
+                                if(fileSize > maxFileSize) {
+                                    ++oversizedFileCount;
+                                }
+                                else {
+                                    std::ifstream input(resolvedEntryPath);
+
+                                    // Unreadable files are skipped without failing
+                                    // the complete project search.
+                                    if(input) {
+                                        std::string line;
+                                        std::size_t lineNumber = 0;
+
+                                        while(resultCount < maxResults &&
+                                              std::getline(input, line)) {
+
+                                            ++lineNumber;
+
+                                            // Search is exact and case-sensitive.
+                                            if(line.find(query) == std::string::npos) {
+                                                continue;
+                                            }
+
+                                            text << relativePath.generic_string()
+                                                 << ':'
+                                                 << lineNumber
+                                                 << ": "
+                                                 << line
+                                                 << '\n';
+
+                                            ++resultCount;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        iteratorError.clear();
+        itr.increment(iteratorError);
+
+        // Preserve any results already collected if recursive traversal later
+        // encounters an entry it cannot advance past.
+        if(iteratorError) {
+            break;
+        }
+    }
+
+    if(resultCount == 0) {
+        text << "No matches found.";
+    }
+    else if(resultCount == maxResults) {
+        text << "\nSearch stopped after "
+             << maxResults
+             << " matches.";
+    }
+
+    if(oversizedFileCount > 0) {
+        text << "\n"
+             << oversizedFileCount
+             << (oversizedFileCount == 1
+                 ? " file was skipped because it exceeds the 1 MiB search limit."
+                 : " files were skipped because they exceed the 1 MiB search limit.");
+    }
+
+    return {
+        true,
+        text.str()
     };
 }

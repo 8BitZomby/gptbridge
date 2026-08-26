@@ -648,7 +648,7 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
     }
 
     // SEARCH PROJECT FILES
-    // search_project_files find matching text inside readable active-project files
+    // search_project_files finds matching text inside readable active-project files
     if(toolName == "search_project_files") {
         // The tool requires a non-empty text query in arguments.query
         if(!message["params"].contains("arguments") ||
@@ -656,224 +656,74 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
            !message["params"]["arguments"].contains("query") ||
            !message["params"]["arguments"]["query"].is_string()) {
 
-            sendJsonRpcError(message["id"], -32602, "search_project_files requires a string query");
+            sendJsonRpcError(
+                message["id"],
+                -32602,
+                "search_project_files requires a string query"
+            );
             return;
         }
 
-        const std::string query = message["params"]["arguments"]["query"].get<std::string>();
+        const std::string query =
+            message["params"]["arguments"]["query"].get<std::string>();
 
         if(query.empty()) {
-            sendJsonRpcError(message["id"], -32602, "search_project_files query cannot be empty");
+            sendJsonRpcError(
+                message["id"],
+                -32602,
+                "search_project_files query cannot be empty"
+            );
             return;
         }
 
-        // Try to determine which persistent gptbridge session storage this MCP server should use
-        const std::optional<PersistentSessionStorage> sessionStorage = tryResolvePersistentSessionStorageForMcp();
+        // Resolve the persistent gptbridge session this MCP server should use.
+        const std::optional<PersistentSessionStorage> sessionStorage =
+            tryResolvePersistentSessionStorageForMcp();
 
         if(!sessionStorage.has_value()) {
-            sendToolError(message["id"], "MCP session storage could not be resolved");
+            sendToolError(
+                message["id"],
+                "MCP session storage could not be resolved"
+            );
             return;
         }
 
-        // The optional contains a PersistentSessionStorage object, so access it directly
-        const PersistentSessionStorage& persistentSessionStorage = sessionStorage.value();
+        const PersistentSessionStorage& persistentSessionStorage =
+            sessionStorage.value();
 
-        // Read the active project from the selected gptbridge session
-        const std::string activeProject = getActiveProject(persistentSessionStorage);
+        // Search uses the project currently active in the selected logical session.
+        const std::string activeProject =
+            getActiveProject(persistentSessionStorage);
 
         if(activeProject.empty() || !projectExists(activeProject)) {
-            sendToolError(message["id"], "No valid active gptbridge project");
+            sendToolError(
+                message["id"],
+                "No valid active gptbridge project"
+            );
             return;
         }
 
-        // Resolve the registered project root through the non-throwing filesystem
-        // overload so search containment checks use one canonical location.
-        std::error_code projectPathError;
-        const std::filesystem::path projectPath =
-            std::filesystem::canonical(
+        // Run filesystem traversal and search independently from MCP transport.
+        const McpProjectFileResult searchResult =
+            searchMcpProjectFiles(
                 getProjectPath(activeProject),
-                projectPathError
+                query
             );
 
-        if(projectPathError) {
-            sendToolError(message["id"], "Failed to resolve active project path");
+        if(!searchResult.success) {
+            sendToolError(
+                message["id"],
+                searchResult.text
+            );
             return;
         }
 
-        // Load .gptignore once rather than reopening it for every searched entry
-        const GptIgnore ignoreRules(projectPath);
-
-        constexpr std::size_t maxResults = 50;
-        constexpr std::uintmax_t maxFileSize = 1024 * 1024;
-
-        std::size_t resultCount = 0;
-        std::size_t oversizedFileCount = 0;
-        std::ostringstream text;
-
-        // Walk the project recursively while skipping directories that cannot be
-        // entered because of filesystem permissions.
-        std::error_code iteratorError;
-
-        std::filesystem::recursive_directory_iterator itr(
-            projectPath,
-            std::filesystem::directory_options::skip_permission_denied,
-            iteratorError
-        );
-
-        const std::filesystem::recursive_directory_iterator end;
-
-        if(iteratorError) {
-            sendToolError(message["id"], "Failed to enumerate active project files");
-            return;
-        }
-
-        while(itr != end && resultCount < maxResults) {
-            const std::filesystem::path entryPath = itr->path();
-
-            // Preserve the entry's alias path for filtering and result presentation.
-            // Symlink targets are resolved separately for containment checks below.
-            const std::filesystem::path relativePath =
-                entryPath.lexically_relative(projectPath);
-
-            if(!relativePath.empty()) {
-                std::error_code typeError;
-                const bool isDirectory = itr->is_directory(typeError);
-
-                if(!typeError && isDirectory) {
-                    const std::string directoryName =
-                        entryPath.filename().string();
-
-                    // Never descend into generated/cache/sensitive directories or
-                    // directories explicitly excluded by this project's .gptignore.
-                    if(directoryName == "build" ||
-                       directoryName == ".cache" ||
-                       isSensitiveProjectPath(relativePath) ||
-                       ignoreRules.isIgnored(relativePath, true)) {
-
-                        itr.disable_recursion_pending();
-                    }
-                }
-
-                else if(!typeError) {
-                    typeError.clear();
-                    const bool isRegularFile =
-                        itr->is_regular_file(typeError);
-
-                    if(!typeError && isRegularFile) {
-                        // Resolve the file target before searching it. A file symlink inside
-                        // the project may still resolve to content outside the project root.
-                        std::error_code resolvedPathError;
-                        const std::filesystem::path resolvedEntryPath =
-                            std::filesystem::weakly_canonical(
-                                entryPath,
-                                resolvedPathError
-                            );
-
-                        if(!resolvedPathError) {
-                            std::error_code resolvedRelativeError;
-                            const std::filesystem::path resolvedRelativePath =
-                                std::filesystem::relative(
-                                    resolvedEntryPath,
-                                    projectPath,
-                                    resolvedRelativeError
-                                );
-
-                            // Search only when both the alias path and resolved target remain
-                            // inside the project and satisfy the shared visibility policies.
-                            if(!resolvedRelativeError &&
-                               !resolvedRelativePath.empty() &&
-                               *resolvedRelativePath.begin() != ".." &&
-                               !ignoreRules.isIgnored(relativePath) &&
-                               !ignoreRules.isIgnored(resolvedRelativePath) &&
-                               isProjectPathVisible(relativePath) &&
-                               isProjectPathVisible(resolvedRelativePath)) {
-
-                                std::error_code fileSizeError;
-                                const std::uintmax_t fileSize =
-                                    std::filesystem::file_size(
-                                        resolvedEntryPath,
-                                        fileSizeError
-                                    );
-
-                                // Skip files whose size cannot be determined. Oversized files are
-                                // counted so the caller knows the search did not inspect every file.
-                                if(!fileSizeError) {
-                                    if(fileSize > maxFileSize) {
-                                        ++oversizedFileCount;
-                                    }
-                                    else {
-                                        std::ifstream input(resolvedEntryPath);
-
-                                        // Unreadable files are skipped rather than failing the
-                                        // entire search operation.
-                                        if(input) {
-                                            std::string line;
-                                            std::size_t lineNumber = 0;
-
-                                            while(resultCount < maxResults &&
-                                                  std::getline(input, line)) {
-
-                                                ++lineNumber;
-
-                                                // Search uses exact case-sensitive matching.
-                                                if(line.find(query) == std::string::npos) {
-                                                    continue;
-                                                }
-
-                                                text << relativePath.generic_string()
-                                                     << ':'
-                                                     << lineNumber
-                                                     << ": "
-                                                     << line
-                                                     << '\n';
-
-                                                ++resultCount;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            iteratorError.clear();
-            itr.increment(iteratorError);
-
-            // If recursive traversal itself can no longer advance, return whatever
-            // search results were collected successfully before the filesystem error.
-            if(iteratorError) {
-                break;
-            }
-        }
-
-        // Explain when the search found nothing or stopped at the result limit.
-        if(resultCount == 0) {
-            text << "No matches found.";
-        }
-        else if(resultCount == maxResults) {
-            text << "\nSearch stopped after "
-                 << maxResults
-                 << " matches.";
-        }
-
-        // Report oversized files separately so callers know when the search did not
-        // inspect every otherwise-visible project file.
-        if(oversizedFileCount > 0) {
-            text << "\n"
-                 << oversizedFileCount
-                 << (oversizedFileCount == 1
-                     ? " file was skipped because it exceeds the 1 MiB search limit."
-                     : " files were skipped because they exceed the 1 MiB search limit.");
-        }
-
-        // Return project-relative matches as one MCP text content block
+        // Return the formatted project-relative search results as MCP text.
         const nlohmann::json result = {
             {"content", nlohmann::json::array({
                 {
                     {"type", "text"},
-                    {"text", text.str()}
+                    {"text", searchResult.text}
                 }
             })}
         };
