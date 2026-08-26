@@ -21,6 +21,7 @@ enum class Command {
     Show,
     Status,
     Use,
+    Version,
     Unknown
 };
 

@@ -9,6 +9,7 @@
 #include "ShellCommands.hpp"
 #include "StatusCommands.hpp"
 #include "UseCommand.hpp"
+#include "VersionCommand.hpp"
 
 #include <exception>
 #include <iostream>
@@ -45,7 +46,7 @@ int main(int argc, char* argv[]) {
             case Command::Show: return handleShowCommand(argc, argv);
             case Command::Status: return handleStatusCommand(argc, argv);
             case Command::Use: return handleUseCommand(argc, argv);
-
+            case Command::Version: return handleVersionCommand(argc, argv);
             case Command::Unknown:
                 std::cout << "Unknown command: " << argv[1] << '\n';
                 return 1;

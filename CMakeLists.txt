@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(gptbridge LANGUAGES CXX)
+project(gptbridge VERSION 0.1.0 LANGUAGES CXX)
 
 include(FetchContent)
 # Fetch the JSON library at configure time so it does not require
@@ -43,6 +43,13 @@ configure_file(
     @ONLY
 )
 
+# Generate a C++ header containing the semantic version declared by project().
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Version.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/Version.hpp"
+    @ONLY
+)
+
 add_executable(gptb
     src/CaptureCoordinator.cpp
     src/CommandLine.cpp
@@ -80,6 +87,7 @@ add_executable(gptb
     src/TerminalSecretDetector.cpp
     src/TimeUtils.cpp
     src/UseCommand.cpp
+    src/VersionCommand.cpp
 )
 
 target_include_directories(gptb PRIVATE

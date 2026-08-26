@@ -68,7 +68,10 @@ int handleHelpCommand(int argc, char* argv[]) {
         << '\n'
         << "Options:\n"
         << "  -h, --help\n"
-        << "      Show this help.\n";
+        << "      Show this help.\n"
+        << '\n'
+        << "  -V, --version\n"
+        << "      Show the gptb version.\n";
 
     return 0;
 }
