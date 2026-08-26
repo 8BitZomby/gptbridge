@@ -54,8 +54,8 @@ int handleHelpCommand(int argc, char* argv[]) {
         << "  use <project-name|.>\n"
         << "      Change the active project for the current session.\n"
         << '\n'
-        << "  push <count>\n"
-        << "      Copy recent terminal interactions into persistent context.\n"
+        << "  push [count|append|replace]\n"
+        << "      Push terminal interactions using the saved mode, or set the persistent push mode.\n"
         << '\n'
         << "  show\n"
         << "      Display persistent terminal context.\n"
@@ -63,8 +63,8 @@ int handleHelpCommand(int argc, char* argv[]) {
         << "  clear\n"
         << "      Clear persistent terminal context.\n"
         << '\n'
-        << "  sync\n"
-        << "      Syncronizes MCP with the logical session attached to this shell\n"
+        << "  mcp sync\n"
+        << "      Synchronize MCP with the logical session attached to this shell\n"
         << '\n'
         << "Options:\n"
         << "  -h, --help\n"

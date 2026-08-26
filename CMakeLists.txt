@@ -62,12 +62,13 @@ add_executable(gptb
     src/ProjectCommands.cpp
     src/Random.cpp
     src/RestoreCommand.cpp
+    src/SensitivePath.cpp
     src/SessionAttachment.cpp
     src/SessionCommands.cpp
     src/SessionId.cpp
     src/SessionManager.cpp
     src/SessionNonce.cpp
-    src/SensitivePath.cpp
+    src/Settings.cpp
     src/ShellCommands.cpp
     src/ShellIntegration.cpp
     src/ShellIntegrationEncoder.cpp
