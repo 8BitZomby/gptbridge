@@ -97,23 +97,12 @@ void setMcpActiveSessionId(const std::string& sessionId) {
         {"active_session", sessionId}
     };
 
-    // Create or repair the file with owner-only permissions before writing
-    ensurePrivateFile(statePath);
-
-    std::ofstream output(statePath);
-
-    if(!output) {
-        throw std::runtime_error("Failed to open MCP state file for writing");
-    }
-
-    // Keep the file human-readable so session-selection probems can be
-    // inspected directly during development and debugging
-    output << state.dump(4) << '\n';
-
-    // Check the stream after writing so disk or I/O failures are not logged
-    if(!output) {
-        throw std::runtime_error("Failed to write MCP state file");
-    }
+    // Keep the file human-readable while replacing the committed state only
+    // after the complete new JSON has been written successfully.
+    writePrivateFileAtomically(
+        statePath,
+        state.dump(4) + '\n'
+    );
 }
 
 
