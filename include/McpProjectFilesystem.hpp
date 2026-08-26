@@ -19,7 +19,7 @@ struct McpProjectFileResult {
 /**
  * readMcpProjectFile()
  * Reads one MCP-visible project file while enforcing project containment,
- * symlink, .gptignore, visibility, and file-size policies.
+ * symlink, .gptignore, visibility, file-size, and binary-file policies.
  */
 McpProjectFileResult readMcpProjectFile(
     const std::filesystem::path& projectRoot,
@@ -30,8 +30,8 @@ McpProjectFileResult readMcpProjectFile(
 /**
  * searchMcpProjectFiles()
  * Searches MCP-visible project files for exact case-sensitive text while
- * enforcing project containment, symlink, .gptignore, visibility, and
- * file-size policies.
+ * enforcing project containment, symlink, .gptignore, visibility, file-size,
+ * and binary-file policies.
  */
 McpProjectFileResult searchMcpProjectFiles(
     const std::filesystem::path& projectRoot,

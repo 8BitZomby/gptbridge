@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(gptbridge VERSION 0.2.4 LANGUAGES CXX)
+project(gptbridge VERSION 0.2.5 LANGUAGES CXX)
 
 include(FetchContent)
 # Fetch the JSON library at configure time so it does not require

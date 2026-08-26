@@ -5,11 +5,51 @@
 #include "SensitivePath.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <vector>
+
+
+namespace {
+
+    /**
+     * isBinaryFile()
+     * Samples the beginning of a file and treats it as binary when a NUL byte
+     * is present. This avoids sending common binary formats through MCP text
+     * reads or searching arbitrary binary contents as lines.
+     */
+    bool isBinaryFile(const std::filesystem::path& filePath) {
+        // Max number of bytes to inspect
+        constexpr std::size_t sampleSize = 8 * 1024;
+
+        // Open the file without text-mode transformations
+        std::ifstream input(filePath, std::ios::binary);
+
+        // Report "not binary" when the file cannot be opened here
+        if(!input) {
+            return false;
+        }
+
+        // Store the sampled bytes
+        std::array<char, sampleSize> buffer{};
+
+        // Read up to sampleSize bytes from the start of the file
+        input.read(
+            buffer.data(),
+            static_cast<std::streamsize>(buffer.size())
+        );
+
+        // Record how many bytes were actually read
+        const std::streamsize bytesRead = input.gcount();
+
+        // Search only the valid sample bytes for a NUL byte
+        return std::find(buffer.begin(), buffer.begin() + bytesRead, '\0') != buffer.begin() + bytesRead;
+    }
+
+}
 
 
 /**
@@ -159,6 +199,14 @@ McpProjectFileResult readMcpProjectFile(
         };
     }
 
+    // Reject binary contents before reading them as MCP text.
+    if(isBinaryFile(filePath)) {
+        return {
+            false,
+            "Requested project file appears to be binary"
+        };
+    }
+
     std::ifstream input(filePath);
 
     if(!input) {
@@ -304,7 +352,7 @@ McpProjectFileResult searchMcpProjectFiles(
                                 if(fileSize > maxFileSize) {
                                     ++oversizedFileCount;
                                 }
-                                else {
+                                else if(!isBinaryFile(resolvedEntryPath)) {
                                     std::ifstream input(resolvedEntryPath);
 
                                     // Unreadable files are skipped without failing
