@@ -162,7 +162,7 @@ void deleteSession(const std::string& sessionId) {
     std::filesystem::remove_all(sessionDirectory, removalError);
 
     if(removalError) {
-        std::runtime_error("Failed to delete session: " + sessionId);
+        throw std::runtime_error("Failed to delete session: " + sessionId);
     }
 }
 
