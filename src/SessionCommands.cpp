@@ -1,98 +1,211 @@
 #include "SessionCommands.hpp"
-#include "Config.hpp"
-#include "ProjectManager.hpp"
+
+#include "RestoreCommand.hpp"
+#include "SessionAttachment.hpp"
 #include "SessionManager.hpp"
-#include "Storage.hpp"
 
-#include <filesystem>
+#include <algorithm>
+#include <cstdlib>
+#include <iomanip>
+#include <ios>
 #include <iostream>
-#include <stdexcept>
 #include <string>
+#include <vector>
 
 
-/**
- * handleSessionCommand()
- * Changes whether session state is global or terminal-specific.
- */
-int handleSessionCommand(int argc, char* argv[]) {
-    // "gptb session" requires exactly one session-mode argument.
-    if(argc != 3) {
-        std::cout << "Usage: gptb session <global|per-terminal>\n";
-        return 1;
+
+namespace {
+    /**
+     * closeSessionCommand()
+     * Closes every live managed-shell attachment belonging to the requested
+     * logical session
+     */
+    int closeSessionCommand(const std::string& sessionId) {
+        // Do not close the managed shell that is currently executing this command.
+        // Closing a session from another terminal allows the target PTY parent to
+        // unwind normally and restore its terminal state
+        const char* currentSessionId = std::getenv("GPTB_SESSION_ID");
+
+        if(currentSessionId != nullptr && sessionId == currentSessionId) {
+            std::cout << "Cannot close the current session from inside itself\n";
+            return 1;
+        }
+
+        const std::size_t closedAttachmentCount = closeSessionAttachments(sessionId);
+
+        if(closedAttachmentCount == 0) {
+            std::cout << "Session is not active: " << sessionId << '\n';
+            return 1;
+        }
+
+        std::cout << "Closed session: " << sessionId << '\n';
+        return 0;
     }
 
-    const std::string mode = argv[2];
+    /**
+     * deleteSessionCommand()
+     * Handles the interactive CLI flow for permanently deleting one logical
+     * session. The actual deletion rules and filesystem removal remain owned
+     * by SessionManager::deleteSession()
+     */
+    int deleteSessionCommand(const std::string& sessionId) {
+        // Load the saved session metadata so the confirmation prompt can show the
+        // project name and reject obviously active session before asking the user
+        const std::vector<SessionInfo> sessions = listSessions();
 
-    try {
-        // Convert the CLI text into the strongly typed SessionMode value.
-        setSessionMode(sessionModeFromString(mode));
+        const auto sessionItr = std::find_if(
+            sessions.begin(),
+            sessions.end(),
+            [&sessionId](const SessionInfo& session) {
+
+                return session.id == sessionId;
+            }
+        );
+
+        // Do not prompt for a session that is not part of the saved session registry
+        if(sessionItr == sessions.end()) {
+            std::cout << "Session does not exist: " << sessionId << '\n';
+            return 1;
+        }
+
+        // Deletion is intentionally separate from closing. Active sessions must be
+        // closed first so their managed shalls can shut down and clean up normally
+        if(sessionItr->active) {
+            std::cout << "Session is active. Close it before deleting:" << sessionId << '\n';
+            return 1;
+        }
+
+        // Include the associated project name when one exists so the user can
+        // clearly identify which persistent session data is about to be removed
+        std::cout << "Delete session: " << sessionId;
+        if(!sessionItr->activeProject.empty()) {
+            std::cout << " (" << sessionItr->activeProject << ")";
+        }
+        std::cout << "?\n"
+                  << "This will permanently delete its saved session data and cannot be undone. [y/N]: ";
+        std::string response;
+        std::getline(std::cin, response);
+
+        // Only an explicit y/Y confirms deletion. Empty input and every other
+        // response safely cancels the operation
+        if(response != "y" && response != "Y") {
+            std::cout << "Session deletion cancelled\n";
+            return 0;
+        }
+
+        // Delegate the actual validation and filesystem deletion to SessionManager
+        deleteSession(sessionId);
+
+        std::cout << "Deleted session: " << sessionId << '\n';
+        return 0;
     }
-    catch(const std::invalid_argument&) {
-        std::cout << "Unknown session mode: " << mode << '\n';
-        return 1;
+
+    /**
+     * listSessionCommand()
+     * Prints all saved gptbridge sessions
+     */
+    int listSessionCommand() {
+        // Load each saved session and its current active project
+        const std::vector<SessionInfo> sessions = listSessions();
+
+        if(sessions.empty()) {
+            std::cout << "No saved sessions\n";
+            return 0;
+        }
+
+        // Display the session ID, runtime state, and active project on one line
+        for(const SessionInfo& session : sessions) {
+            // Use fixed-width columns so IDs, runtime state, and project names line up
+            // consistently even when individual values have different lengths
+            std::cout << std::left
+                      << std::setw(12) << session.id
+                      << std::setw(12) << (session.active ? "active" : "inactive");
+
+            if(session.activeProject.empty()) {
+                std::cout << "none";
+            }
+            else {
+                std::cout << session.activeProject;
+            }
+            std::cout << '\n';
+        }
+        return 0;
     }
-
-    // Confirm the mode that was persisted.
-    std::cout << "Session mode: "
-              << sessionModeToString(getSessionMode())
-              << '\n';
-
-    return 0;
 }
 
 
 /**
- * handleStatusCommand()
- * Displays the current gptbridge storage, session, and active-project state.
+ * parseSessionCommand()
+ * Converts a session subcommand string into the corresponding SessionCommand value
  */
-int handleStatusCommand(int argc, char* argv[]) {
-    // "gptb status" does not accept additional arguments.
-    if(argc != 2) {
-        std::cout << "Usage: gptb status\n";
+SessionCommand parseSessionCommand(const std::string& command) {
+    if(command == "close") { return SessionCommand::Close; }
+    if(command == "delete") { return SessionCommand::Delete; }
+    if(command == "list") { return SessionCommand::List; }
+    if(command == "restore") { return SessionCommand::Restore; }
+
+    return SessionCommand::Unknown;
+}
+
+
+/**
+ * handleSessionCommand()
+ * Validates and dispatches logical-session management commands
+ */
+int handleSessionCommand(int argc, char* argv[]) {
+    // "gptb session" requires at least one subcommand
+    if(argc < 3) {
+        std::cout << "Usage: gptb session <close|delete|list|restore>\n";
         return 1;
     }
 
-    std::cout << "gptbridge status\n";
-    std::cout << "Storage root: " << getStorageRoot() << '\n';
+    // Convert the requested subcommand once before dispatching it
+    const SessionCommand sessionCommand = parseSessionCommand(argv[2]);
 
-    // Resolve the session mode before inspecting mode-specific state.
-    const SessionMode sessionMode = getSessionMode();
+    switch(sessionCommand) {
 
-    std::cout << "Session mode: "
-              << sessionModeToString(sessionMode)
-              << '\n';
+        case SessionCommand::Close:
+            // Closing a session requires the logical session ID to target
+            if(argc != 4) {
+                std::cout << "Usage: gptb session close <session-id>\n";
+                return 1;
+            }
+            return closeSessionCommand(argv[3]);
 
-    // A terminal ID only applies when each terminal has separate state.
-    if(sessionMode == SessionMode::PerTerminal) {
-        std::cout << "Session ID: "
-                  << getCurrentSessionId()
-                  << '\n';
+        case SessionCommand::Delete:
+            // Deleting a session requires the logical session ID to target
+            if(argc != 4) {
+                std::cout << "Usage: gptb session delete <session-id>\n";
+                return 1;
+            }
+            return deleteSessionCommand(argv[3]);
+
+        case SessionCommand::List:
+            // Listing sessions does not accept any additional arguments
+            if(argc != 3) {
+                std::cout << "Usage: gptb session list\n";
+                return 1;
+            }
+            return listSessionCommand();
+
+        case SessionCommand::Restore:
+            // "gptb session restore" restores the most recently used session
+            // "gptb session restore <session-id>" restores the requested session
+            if(argc != 3 && argc != 4) {
+                std::cout << "Usage: gptb session restore [session-id]\n";
+                return 1;
+            }
+            if(argc == 4) {
+                return restoreSession(std::string(argv[3]));
+            }
+            return restoreSession(std::nullopt);
+
+        case SessionCommand::Unknown:
+            std::cout << "Unknown session command: " << argv[2] << '\n';
+            std::cout << "Usage: gptb session <close|delete|list|restore>\n";
+            return 1;
     }
 
-    // Determine which project is currently selected for this session.
-    const std::string activeProject = getActiveProjectForCurrentSession();
-
-    if(activeProject.empty()) {
-        std::cout << "Active project: none\n";
-        return 0;
-    }
-
-    // Session state may reference a project that has since been removed.
-    if(!projectExists(activeProject)) {
-        std::cout << "Active project: "
-                  << activeProject
-                  << " (not registered)\n";
-        return 0;
-    }
-
-    // Show the saved root path for the active registered project.
-    const std::filesystem::path activeProjectPath =
-        getProjectPath(activeProject);
-
-    std::cout << "Active project: " << activeProject << '\n';
-    std::cout << "Project path: "
-              << activeProjectPath.string()
-              << '\n';
-
-    return 0;
+    // All enum values are handled above. Fallback for compiler and future enums
+    return 1;
 }

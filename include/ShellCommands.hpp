@@ -1,12 +1,14 @@
 #ifndef GPTB_SHELL_COMMANDS_HPP
 #define GPTB_SHELL_COMMANDS_HPP
 
+#include <string>
+
 
 /**
  * runManagedShell()
- * Launches the PTY-backed gptbridge managed shell
+ * Launches the PTY-backed managed shell attached to the supplied logical session
  */
-int runManagedShell();
+int runManagedShell(const std::string& sessionId);
 
 
 /**

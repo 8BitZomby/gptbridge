@@ -1,10 +1,14 @@
 #include "CommandLine.hpp"
 #include "ContextCommands.hpp"
-#include "ListCommands.hpp"
+#include "HelpCommand.hpp"
+#include "InitCommand.hpp"
 #include "McpCommands.hpp"
 #include "ProjectCommands.hpp"
+#include "RestoreCommand.hpp"
 #include "SessionCommands.hpp"
 #include "ShellCommands.hpp"
+#include "StatusCommands.hpp"
+#include "UseCommand.hpp"
 
 #include <exception>
 #include <iostream>
@@ -25,13 +29,14 @@ int main(int argc, char* argv[]) {
         // Command handler may throw for malformed JSON, filesystem failures,
         // or other storage errors. Handle those at the CLI boundary below.
         switch(command) {
-            case Command::Add: return handleAddProjectCommand(argc, argv);
             case Command::Capture: return handleCaptureCommand(argc, argv);
             case Command::Clear: return handleClearCommand(argc, argv);
-            case Command::Init: return handleInitProjectCommand(argc, argv);
-            case Command::List: return handleListCommand(argc, argv);
+            case Command::Help: return handleHelpCommand(argc, argv);
+            case Command::Init: return handleInitCommand(argc, argv);
+            case Command::Mcp: return handleMcpCommand(argc, argv);
             case Command::McpServer: return handleMcpServerCommand(argc, argv);
             case Command::Push: return handlePushCommand(argc, argv);
+            case Command::Project: return handleProjectCommand(argc, argv);
             case Command::Remove: return handleRemoveCommand(argc, argv);
             case Command::Restore: return handleRestoreCommand(argc, argv);
             case Command::Session: return handleSessionCommand(argc, argv);
@@ -39,7 +44,7 @@ int main(int argc, char* argv[]) {
             case Command::ShellInit: return handleShellInitCommand(argc, argv);
             case Command::Show: return handleShowCommand(argc, argv);
             case Command::Status: return handleStatusCommand(argc, argv);
-            case Command::Use: return handleUseProjectCommand(argc, argv);
+            case Command::Use: return handleUseCommand(argc, argv);
 
             case Command::Unknown:
                 std::cout << "Unknown command: " << argv[1] << '\n';

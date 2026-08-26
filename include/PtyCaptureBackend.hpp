@@ -24,10 +24,19 @@ class PtyCaptureBackend : public CaptureBackend {
 
     public:
 
+        /**
+         * PtyCaptureBackend()
+         * Creates a PTY backend for the supplied logical gptbridge session
+         */
+        explicit PtyCaptureBackend(std::string sessionId);
+
         // Manages the terminal state for a captured shell session and restores terminal setting when session ends
         void run() override;
 
     private:
+
+        // Stable logical gptbridge session associated with this managed shell
+        std::string sessionId_;
 
         // Runs the interactive shell through pseudo-terminal and forwards traffic until session ends
         void runSession();
@@ -52,6 +61,10 @@ class PtyCaptureBackend : public CaptureBackend {
 
         // Waits for the child shell to terminate and collects its process status
         void waitForChild(pid_t childPid);
+
+        // Terminates and reaps the child shell when parent-side PTY setup fails after
+        // forkpty() has already created the child process
+        void terminatesChildAfterStartupFailure(pid_t childPid) noexcept;
 
         // Creates the poll descriptor set for real-terminal input and child-PTY output
         std::array<pollfd, 2> createPollDescriptors(int masterFd) const;

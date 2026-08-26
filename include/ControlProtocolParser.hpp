@@ -126,11 +126,11 @@ class ControlProtocolParser {
         static std::string percentDecodePath(std::string_view encodedPath);
 
         /**
-         * partialOscIntroducerLength()
-         * Returns the number of trailing bytes in pendingBytes that could be
-         * the beginning of the OSC introducer split across PTY reads
+         * partialControlSequenceLength()
+         * Returns the number of trailing bytes in pendingBytes that could begin a
+         * recognized OSC sequence or terminal-query sequence in the next PTY read
          */
-        std::size_t partialOscIntroducerLength() const;
+        std::size_t partialControlSequenceLength() const;
 
         /**
         * emitOutput()

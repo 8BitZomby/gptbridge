@@ -8,6 +8,26 @@
 #include <utility>
 
 
+namespace {
+    /**
+     * isTerminalOscQuery()
+     * Returns true for OSC sequences that ask the terminal for information
+     * rather than changing terminal presentation state
+     */
+    bool isTerminalOscQuery(std::string_view sequence) {
+        return sequence.starts_with("\x1b]10;?") || sequence.starts_with("\x1b]11;?");
+    }
+
+    /** isTerminalCsiQuery()
+     * Returns true for CSI sequences that ask the terminal for information
+     * rather than changing terminal presentation state
+     */
+    bool isTerminalCsiQuery(std::string_view sequence) {
+        return sequence == "\x1b[c";
+    }
+}
+
+
 /**
  * ControlProtocolParser()
  * Creates a parser for one capture session. The parser stores the session
@@ -19,21 +39,22 @@ ControlProtocolParser::ControlProtocolParser(std::string sessionNonce, OutputHan
 
 
 /**
- * partialOscIntroducerLength()
- * Returns the number of trailing bytes in pendingBytes that could be
- * the beginning of the OSC intriducer split across PTY reads
+ * partialControlSequenceLength()
+ * Returns the number of trailing bytes in pendingBytes that could begin a
+ * recognized OSC sequence or termina-query sequence in the next PTY read
  */
-std::size_t ControlProtocolParser::partialOscIntroducerLength() const {
-    // The OSC introducer is ESC ], so the only incomplete suffix worth
-    // preserving is a single trailing ESC byte
-    if(!pendingBytes.empty() && pendingBytes.back() == ControlProtocol::oscIntroducer.front()) {
-        // Preserve the trailing ESC because the next PTY read may begin with
-        // ']', completing the twp-byte OSC introducer
+std::size_t ControlProtocolParser::partialControlSequenceLength() const {
+    // ESC [ could become the CSI device-attributes query ESC [ c
+    if(pendingBytes.ends_with("\x1b[")) {
+        return 2;
+    }
+
+    // A trailing ESC could begin either OSC (ESC ]) or CSI (ESC [)
+    if(!pendingBytes.empty() && pendingBytes.back() == '\x1b') {
         return 1;
     }
 
-    // No trailing bytes could become the start of an OSC sequence, so nothing
-    // needs to be retained solely for introducer matching
+    // No trailing bytes need to be retained for control-sequence matching
     return 0;
 }
 
@@ -126,12 +147,21 @@ ControlProtocolParser::OscParseResult ControlProtocolParser::tryParseOscSequence
     bool suppressSequence = false;
     bool captureEligible = true;
 
+    // OSC 10, OSC 11
+    // Terminal queries must remain visible live so the requesting program can
+    // receive the response, but replaying them later would trigger a new reply
+    if(isTerminalOscQuery(sequence)) {
+        captureEligible = false;
+    }
+
+    // OSC 7
     if(sequence.starts_with(ControlProtocol::osc7Prefix)) {
         // OSC 7 is standard terminal metadata. Decode it for gptbridge while
         // still forwarding the original sequence to the outer terminal
         parseOsc7(sequence);
         captureEligible = false;
     }
+    // OSC 133
     else if(sequence.starts_with(ControlProtocol::osc133Prefix)) {
         // Only the OSC 133 lifecycle forms understood by gptbridge produce
         // semantic events. Other OSC 133 forms remain valid terminal data
@@ -612,6 +642,21 @@ void ControlProtocolParser::consume(std::string_view bytes) {
     // Continue processing until the remaining bytes are either exhausted or
     // incomplete enough that another PTY read is required
     while(!pendingBytes.empty()) {
+        // The CSI device-attributes query must be forwarded live but not persisted.
+        // Handle it explicitly when it begins at the front of the buffered stream
+        if(pendingBytes.starts_with("\x1b[c")) {
+            emitOutput(
+                std::string_view(
+                    pendingBytes.data(),
+                    3
+                ),
+                false
+            );
+
+            pendingBytes.erase(0, 3);
+            continue;
+        }
+
         // Search for the next OSC introducer. Ever byte before it is ordinary
         // terminal data and can be forwarded immediately
         const std::size_t oscPosition = pendingBytes.find(ControlProtocol::oscIntroducer);
@@ -650,7 +695,7 @@ void ControlProtocolParser::consume(std::string_view bytes) {
 
         // No complete OSC introducer is currently present. Preserve only a
         // trailing ESC byte that could become ESC ] when the next read arrives
-        const std::size_t preservedLength = partialOscIntroducerLength();
+        const std::size_t preservedLength = partialControlSequenceLength();
 
         // Everything before the possible partial introducer is confirmed
         // ordinary terminal output and can be emitted now

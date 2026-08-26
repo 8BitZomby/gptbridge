@@ -13,6 +13,7 @@
 # when `gptb shell-init zsh` is evaluated by an ordinary shell.
 if [[ -n "${GPTB_SESSION_NONCE:-}" && -n "${GPTB_EXECUTABLE:-}" ]]; then
 
+
     # Wrap gptb commands inside the managed shell so session-lifecycle commands can
     # affect the shell itself while all other commands still invoke the real binary
     gptb() {
@@ -31,7 +32,6 @@ if [[ -n "${GPTB_SESSION_NONCE:-}" && -n "${GPTB_EXECUTABLE:-}" ]]; then
     # Load zsh's hook-registration helper so gptbridge can install lifecycle hooks
     # without replacing hooks registered by other shell integrations.
     autoload -Uz add-zsh-hook
-
 
     # Tracks whether gptbridge has emitted OSC 133;C for a command that has not yet
     # received its matching OSC 133;D completion marker.
@@ -169,12 +169,12 @@ if [[ -n "${GPTB_SESSION_NONCE:-}" && -n "${GPTB_EXECUTABLE:-}" ]]; then
         # needed for the completed command.
         _gptb_restore_prompt_eol_mark
 
-        # Emit OSC 133;D with the exit status produced by the completed command.
-        "$GPTB_EXECUTABLE" shell-event osc-finished \
-            "$exit_code"
+        # Emit OSC 133;D directly from the managed shell. This standard completion
+        # marker requires only the command's exit status, so it does not need to spawn
+        # GPTB_EXECUTABLE at the critical command-finished boundary.
+        printf '\e]133;D;%d\e\\' "$exit_code"
 
-        # The command has finished regardless of whether internal reporting
-        # succeeded, so a later prompt or shell exit must not complete it again.
+        # The matching completion marker has now been written into the PTY stream.
         GPTB_COMMAND_ACTIVE=0
 
         # Do not prevent other precmd hooks from running.
@@ -196,11 +196,9 @@ if [[ -n "${GPTB_SESSION_NONCE:-}" && -n "${GPTB_EXECUTABLE:-}" ]]; then
         # before the shell terminates.
         _gptb_restore_prompt_eol_mark
 
-        # Emit the final OSC 133;D marker for the command that caused the shell
-        # itself to terminate.
-        "$GPTB_EXECUTABLE" shell-event osc-finished \
-            "$exit_code"
-
+        # Emit the final OSC 133;D directly because no later prompt will complete
+        # the command that caused the managed shell itself to terminate.
+        printf '\e]133;D;%d\e\\' "$exit_code"
         GPTB_COMMAND_ACTIVE=0
 
         # Do not let gptbridge's hook interfere with other zshexit hooks.
@@ -214,12 +212,10 @@ if [[ -n "${GPTB_SESSION_NONCE:-}" && -n "${GPTB_EXECUTABLE:-}" ]]; then
     add-zsh-hook -d precmd _gptb_precmd 2>/dev/null
     add-zsh-hook -d zshexit _gptb_zshexit 2>/dev/null
 
-
     # preexec reports metadata immediately before command execution, while zshexit
     # closes commands that terminate the interactive shell itself.
     add-zsh-hook preexec _gptb_preexec
     add-zsh-hook zshexit _gptb_zshexit
-
 
     # Register gptbridge's precmd hook before other prompt-related precmd hooks.
     # Completing the active interaction first prevents output subsequently produced

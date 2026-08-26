@@ -1,29 +1,34 @@
 #ifndef GPTB_PROJECT_COMMANDS_HPP
 #define GPTB_PROJECT_COMMANDS_HPP
 
-
-/**
- * Handles "gptb add project <name> <path>".
- */
-int handleAddProjectCommand(int argc, char* argv[]);
+#include <string>
 
 
 /**
- * Handles "gptb init <path> <project-name>".
+ * ProjectCommand
+ * Identifies the operation requested under the `gptb project` namespace
  */
-int handleInitProjectCommand(int argc, char* argv[]);
+enum class ProjectCommand {
+    Add,        // Registers a new project without changing the current session
+    List,       // Lists all projects currently stored in the global project registry
+    Remove,     // Removes one registered project from the global project registry
+    Unknown     // Represents an unsupported project subcommand
+};
 
 
 /**
- * Handles "gptb use <project|.>".
+ * parseProjectCommand()
+ * Converts a project subcommand string into the corresponding ProjectCommand
  */
-int handleUseProjectCommand(int argc, char* argv[]);
+ProjectCommand parseProjectCommand(const std::string& command);
 
 
 /**
- * Handles "gptb restore".
+ * handleProjectCommand()
+ * Validates and dispatches commands under `gptb project`.
+ * Handles `gptb project <add|list|remove>`
  */
-int handleRestoreCommand(int argc, char* argv[]);
+int handleProjectCommand(int argc, char* argv[]);
 
 
 #endif

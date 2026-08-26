@@ -6,13 +6,15 @@
  * Converts a top-level CLI command string into the corresponding Command value
  */
 Command parseCommand(const std::string& command) {
-    if(command == "add") { return Command::Add; }
+    if(command == "-h") { return Command::Help; }
+    if(command == "--help") { return Command::Help; }
     if(command == "capture") { return Command::Capture; }
     if(command == "clear") { return Command::Clear; }
     if(command == "init") { return Command::Init; }
-    if(command == "list") { return Command::List; }
+    if(command == "mcp") { return Command::Mcp; }
     if(command == "mcp-server") { return Command::McpServer; }
     if(command == "push") { return Command::Push; }
+    if(command == "project") { return Command::Project; }
     if(command == "remove") { return Command::Remove; }
     if(command == "restore") { return Command::Restore; }
     if(command == "session") { return Command::Session; }

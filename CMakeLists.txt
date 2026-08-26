@@ -45,33 +45,40 @@ configure_file(
 
 add_executable(gptb
     src/CaptureCoordinator.cpp
-    src/Config.cpp
     src/CommandLine.cpp
     src/ContextCommands.cpp
     src/ControlProtocolParser.cpp
     src/ExecutablePath.cpp
-    src/ListCommands.cpp
+    src/HelpCommand.cpp
+    src/InitCommand.cpp
     src/main.cpp
     src/McpCommands.cpp
     src/McpServer.cpp
+    src/McpState.cpp
     src/PersistentSessionStorage.cpp
     src/ProjectManager.cpp
     src/ProjectVisibility.cpp
     src/PtyCaptureBackend.cpp
     src/ProjectCommands.cpp
-    src/Storage.cpp
+    src/Random.cpp
+    src/RestoreCommand.cpp
+    src/SessionAttachment.cpp
     src/SessionCommands.cpp
+    src/SessionId.cpp
     src/SessionManager.cpp
     src/SessionNonce.cpp
     src/SensitivePath.cpp
     src/ShellCommands.cpp
     src/ShellIntegration.cpp
     src/ShellIntegrationEncoder.cpp
+    src/StatusCommands.cpp
+    src/Storage.cpp
     src/TemporaryInteractionHistory.cpp
     src/TerminalContext.cpp
     src/TerminalInteractionJson.cpp
     src/TerminalSecretDetector.cpp
     src/TimeUtils.cpp
+    src/UseCommand.cpp
 )
 
 target_include_directories(gptb PRIVATE

@@ -5,13 +5,14 @@
 
 
 enum class Command {
-    Add,
     Capture,
     Clear,
+    Help,
     Init,
-    List,
+    Mcp,
     McpServer,
     Push,
+    Project,
     Remove,
     Restore,
     Session,

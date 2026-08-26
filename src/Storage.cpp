@@ -1,14 +1,224 @@
 #include "Storage.hpp"
 
+#include "SessionId.hpp"
+
+#include <cstddef>
+#include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 #include <sys/_types/_s_ifmt.h>
 #include <sys/fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+
+/**
+ * allocateNextSessionNumber()
+ * Finds, reserves, and returns the next available logical session number
+ */
+std::uint64_t allocateNextSessionNumber() {
+    // Ensure global storage directory exists (~/.gptbridge)
+    ensureStorageRoot();
+
+    // Store the next session-ID search position separately from individual sessions
+    const std::filesystem::path sequencePath = getStorageRoot() / "session-sequence.json";
+
+    // Separate file used only for synchronization
+    const std::filesystem::path lockPath = getStorageRoot() / "session-sequence.lock";
+
+    // Temporary replacement file used for atomic updates
+    const std::filesystem::path temporaryPath = getStorageRoot() / "session-sequence.tmp";
+
+    // Open or create the dedicated lock file
+    // Create it on first use with owner only permissions
+    const int lockDescriptor = ::open(
+            lockPath.c_str(),               // Lock file path
+            O_RDWR | O_CREAT,               // Read/write; create if missing
+            S_IRUSR | S_IWUSR               // Owner read/write permissions
+    );
+
+    // Allocation cannot continue without access to the lock file
+    if(lockDescriptor == -1) {
+        throw std::runtime_error("Failed to open session sequence lock file");
+    }
+
+    // Prevent concurrent processes from allocating the same number
+    if(::flock(lockDescriptor, LOCK_EX) == -1) {
+        ::close(lockDescriptor);
+        throw std::runtime_error("Failed to lock session sequence");
+    }
+
+    // Track whether the reserved ID has been committed to the sequence file
+    bool allocationCommitted = false;
+
+    // Start searching at session 1 if no sequence has been saved yet
+    std::uint64_t nextSessionNumber = 1;
+
+    // Remember the directory so it can be removed if allocation fails
+    std::filesystem::path allocatedSessionPath;
+
+    try {
+        // Read the saved position where the next search should begin
+        if(std::filesystem::exists(sequencePath)) {
+            std::ifstream input(sequencePath);
+
+            if(!input) {
+                throw std::runtime_error("Failed to open session sequence file for reading");
+            }
+
+            nlohmann::json sequence;
+
+            try {
+                input >> sequence;
+            }
+            catch(const nlohmann::json::parse_error&) {
+                throw std::runtime_error("Failed to parse session sequence file");
+            }
+
+            // The saved number is the first ID to check during this allocation
+            nextSessionNumber = sequence.at("next_session_number").get<std::uint64_t>();
+
+            // Corrupt or unsupported counter values must not enter the search
+            if(nextSessionNumber == 0 || nextSessionNumber > MaxSessionNumber) {
+                throw std::runtime_error("Invalid next session number");
+            }
+        }
+
+        // Make sure the parent directory exists before reserving a session
+        // All logical session directories live beneath ~/.gptbridge/sessions
+        const std::filesystem::path sessionsPath = getStorageRoot() / "sessions";
+        ensurePrivateDirectory(sessionsPath);
+
+        // Zero means no session number has been successfully reserved yet
+        std::uint64_t allocatedSessionNumber = 0;
+
+        // Search every possible ID at most once
+        for(std::uint64_t attempts = 0; attempts < MaxSessionNumber; ++attempts) {
+            // Convert the numeric candidate to user-facing form (e.g. 1 -> "s-0001")
+            const std::string sessionId = formatSessionId(nextSessionNumber);
+
+            // A session number is considered occupied when its directory exists
+            const std::filesystem::path candidatePath = sessionsPath / sessionId;
+
+            // An existing directory means this ID is already in use
+            if(!std::filesystem::exists(candidatePath)) {
+                // Create the directory while the allocation lock is still held
+                ensurePrivateDirectory(candidatePath);
+
+                allocatedSessionNumber = nextSessionNumber;
+                allocatedSessionPath = candidatePath;
+                break;
+            }
+
+            // Move to the next ID, wrapping 9999 back to 0001
+            nextSessionNumber = (nextSessionNumber == MaxSessionNumber) ? 1 : nextSessionNumber + 1;
+        }
+
+        // Every possible session ID is already occupied
+        if(allocatedSessionNumber == 0) {
+            throw std::runtime_error("No available gptbridge session IDs");
+        }
+
+        // Begin the next allocation search after the ID we just received
+        const std::uint64_t nextSearchNumber = (allocatedSessionNumber == MaxSessionNumber) ? 1 : allocatedSessionNumber + 1;
+
+        // Persist only the next place to begin searching, not the formatted ID
+        const nlohmann::json updatedSequence = { {"next_session_number", nextSearchNumber} };
+
+        // Keep the JSON file readable
+        const std::string updatedContents = updatedSequence.dump(4) + '\n';
+
+        // Write the new counter to a temp file first
+        const int temporaryDescriptor = ::open(
+            temporaryPath.c_str(),          // Temporary file path
+            O_WRONLY | O_CREAT | O_TRUNC,   // Write/create/replace contents
+            S_IRUSR | S_IWUSR               // Owner read/write only
+        );
+
+        // Track whether the temporary descriptor still needs to be closed
+        bool temporaryDescriptorOpen = true;
+
+        if(temporaryDescriptor == -1) {
+            throw std::runtime_error("Failed to open temporary session sequence file");
+        }
+
+        try {
+            // Write the complete updated JSON
+            const ssize_t bytesWritten = ::write(
+                temporaryDescriptor,
+                updatedContents.data(),
+                updatedContents.size()
+            );
+
+            // Reject incomplete writes
+            if(bytesWritten != static_cast<ssize_t>(updatedContents.size())) {
+                throw std::runtime_error("Failed to write temporary session sequence file");
+            }
+
+            // Flush the new counter to disk before replacing the old file
+            if(::fsync(temporaryDescriptor) == -1) {
+                throw std::runtime_error("Failed to sync temporary session sequence file");
+            }
+
+            // Close before the temporary file is renamed
+            const int closeResult = ::close(temporaryDescriptor);
+            temporaryDescriptorOpen = false;
+            if(closeResult == -1) {
+                throw std::runtime_error("Failed to close temporary session sequence file");
+            }
+        }
+        catch(...) {
+            // Close only if earlier operation failed while it was still open
+            if(temporaryDescriptorOpen) {
+                ::close(temporaryDescriptor);
+            }
+
+            // Remove any incomplete replacement file
+            std::filesystem::remove(temporaryPath);
+            throw;
+        }
+
+        // Atomically replace the committed counter with the complete new file
+        if(::rename(temporaryPath.c_str(), sequencePath.c_str()) == -1) {
+            std::filesystem::remove(temporaryPath);
+            throw std::runtime_error("Failed to replace session sequence file");
+        }
+
+        // The session reservation and updated sequence are now committed
+        allocationCommitted = true;
+
+        // Allow another process to allocate the next number
+        if(::flock(lockDescriptor, LOCK_UN) == -1) {
+            throw std::runtime_error("Failed to unlock session sequence");
+        }
+
+        // Release the lock file descriptor
+        if(::close(lockDescriptor) == -1) {
+            throw std::runtime_error("Failed to close session sequence lock file");
+        }
+
+        // Return the number allocated before the counter was incremented
+        return allocatedSessionNumber;
+    }
+    catch(...) {
+        // Roll back only if the sequence update was never committed
+        if(!allocationCommitted && !allocatedSessionPath.empty()) {
+            std::filesystem::remove(allocatedSessionPath);
+        }
+
+        // Release the allocation lock before propagating the original error
+        ::flock(lockDescriptor, LOCK_UN);
+        ::close(lockDescriptor);
+
+        throw;
+    }
+}
 
 
 /**

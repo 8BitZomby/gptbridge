@@ -1,4 +1,5 @@
 #include "ProjectCommands.hpp"
+#include "PersistentSessionStorage.hpp"
 #include "ProjectManager.hpp"
 #include "SessionManager.hpp"
 #include "ShellCommands.hpp"
@@ -8,203 +9,192 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 
 namespace {
 
-/**
- * Validates that a project path exists and refers to a directory.
- */
-bool validateProjectPath(const std::filesystem::path& projectPath) {
-    // Registered projects must point to an existing filesystem entry.
-    if(!std::filesystem::exists(projectPath)) {
-        std::cout << "Project path does not exist: "
-                  << projectPath.string() << '\n';
-        return false;
+    /**
+     * Validates that a project path exists and refers to a directory.
+     */
+    bool validateProjectPath(const std::filesystem::path& projectPath) {
+        // Registered projects must point to an existing filesystem entry.
+        if(!std::filesystem::exists(projectPath)) {
+            std::cout << "Project path does not exist: "
+                      << projectPath.string() << '\n';
+            return false;
+        }
+
+        // The project root must be a directory rather than a regular file.
+        if(!std::filesystem::is_directory(projectPath)) {
+            std::cout << "Project path is not a directory: "
+                      << projectPath.string() << '\n';
+            return false;
+        }
+
+        return true;
     }
 
-    // The project root must be a directory rather than a regular file.
-    if(!std::filesystem::is_directory(projectPath)) {
-        std::cout << "Project path is not a directory: "
-                  << projectPath.string() << '\n';
-        return false;
-    }
+    /**
+     * addProjectCommand()
+     * Registers a project in the global project registry without changing
+     * the project selected by the current logical session
+     */
+    int addProjectCommand(int argc, char* argv[]) {
+        // "gptb project add <name> <path>" requires a project name and path
+        if(argc != 5) {
+            std::cout << "Usage: gptb project add <name> <path>\n";
+            return 1;
+        }
 
-    return true;
-}
+        // Normalize the supplied path before validating or storing it.
+        const std::filesystem::path projectPath = normalizeProjectPath(argv[4]);
 
-}
+        if(!validateProjectPath(projectPath)) {
+            return 1;
+        }
 
+        // Save the project name and normalized path in the global registry.
+        saveProject(argv[3], projectPath);
 
-/**
- * handleAddProjectCommand()
- * Registers a project without changing the active project.
- */
-int handleAddProjectCommand(int argc, char* argv[]) {
-    // "gptb add project <name> <path>" requires the project subcommand.
-    if(argc != 5 || std::string(argv[2]) != "project") {
-        std::cout << "Usage: gptb add project <name> <path>\n";
-        return 1;
-    }
+        std::cout << "Project name: " << argv[3] << '\n';
+        std::cout << "Project path: " << projectPath.string() << '\n';
 
-    // Normalize the supplied path before validating or storing it.
-    const std::filesystem::path projectPath =
-        normalizeProjectPath(argv[4]);
-
-    if(!validateProjectPath(projectPath)) {
-        return 1;
-    }
-
-    // Save the project name and normalized path in the global registry.
-    saveProject(argv[3], projectPath);
-
-    std::cout << "Project name: " << argv[3] << '\n';
-    std::cout << "Project path: " << projectPath.string() << '\n';
-
-    return 0;
-}
-
-
-/**
- * handleInitProjectCommand()
- * Registers a project and makes it active for the current session.
- */
-int handleInitProjectCommand(int argc, char* argv[]) {
-    // "gptb init <path> <project-name>" requires a path and project name.
-    if(argc != 4) {
-        std::cout << "Usage: gptb init <path> <project-name>\n";
-        return 1;
-    }
-
-    // Normalize the supplied project directory into an absolute path.
-    const std::filesystem::path projectPath =
-        normalizeProjectPath(argv[2]);
-
-    if(!validateProjectPath(projectPath)) {
-        return 1;
-    }
-
-    const std::string projectName = argv[3];
-
-    // Register the project in the global project registry.
-    saveProject(projectName, projectPath);
-
-    // Make the newly initialized project active for this session.
-    setActiveProjectForCurrentSession(projectName);
-
-    std::cout << "Initialized project: " << projectName << '\n';
-    std::cout << "Project path: " << projectPath.string() << '\n';
-
-    // A session nonce means this command is already running inside a
-    // managed shell
-    const char* sessionNonce = std::getenv("GPTB_SESSION_NONCE");
-
-    if(sessionNonce != nullptr && *sessionNonce != '\0') {
         return 0;
     }
 
-    // Outside a managed shell, initialization immediately enters one
-    return runManagedShell();
-}
-
-
-/**
- * handleUseProjectCommand()
- * Selects an existing project for the current session.
- */
-int handleUseProjectCommand(int argc, char* argv[]) {
-    // "gptb use <project|.>" accepts a saved name or the current directory.
-    if(argc != 3) {
-        std::cout << "Usage: gptb use <project|.>\n";
-        return 1;
-    }
-
-    std::string projectName;
-
-    // "." means: find the project registered at the current directory.
-    if(std::string(argv[2]) == ".") {
-        projectName =
-            findProjectByPath(std::filesystem::current_path());
-
-        if(projectName.empty()) {
-            std::cout << "No project registered at current directory\n";
+    /**
+     * listProjectCommand()
+     * Prints every project currently stored in the global project registry.
+     */
+    int listProjectCommand(int argc) {
+        // "gptb project list" does not accept additional arguments.
+        if(argc != 3) {
+            std::cout << "Usage: gptb project list\n";
             return 1;
         }
-    }
-    else {
-        projectName = argv[2];
 
-        // Named projects must already exist in the registry.
-        if(!projectExists(projectName)) {
-            std::cout << "Project not found: "
-                      << projectName << '\n';
+        const std::vector<ProjectInfo> projects = listProjects();
+
+        if(projects.empty()) {
+            std::cout << "No registered projects\n";
+            return 0;
+        }
+
+        // Display each registered project beside its normalized root path.
+        for(const ProjectInfo& project : projects) {
+            std::cout << project.name
+                      << "    "
+                      << project.path.string()
+                      << '\n';
+        }
+
+        return 0;
+    }
+
+    /**
+     * removeProjectCommand()
+     * Removes a project from the global registry after confirming that no saved
+     * logical session still references it.
+     */
+    int removeProjectCommand(int argc, char* argv[]) {
+        // "gptb project remove <name>" requires exactly one project name.
+        if(argc != 4) {
+            std::cout << "Usage: gptb project remove <name>\n";
             return 1;
         }
-    }
 
-    // Store the selected project in the current session state.
-    setActiveProjectForCurrentSession(projectName);
+        const std::string projectName = argv[3];
 
-    std::cout << "Active project: " << projectName << '\n';
-
-    return 0;
-}
-
-
-/**
- * handleRestoreCommand()
- * Re-enters a managed shell using the current or explicitly selected project
- */
-int handleRestoreCommand(int argc, char* argv[]) {
-    // "gptb restore" uses the current session's saved active project.
-    // "gptb restore <project>" selects a registered project before restoring.
-    if(argc != 2 && argc != 3) {
-        std::cout << "Usage: gptb restore [project]\n";
-        return 1;
-    }
-
-    // Restore must be started from the user's normal shell. Starting another
-    // managed shell inside an existing one would create a nested PTY session.
-    const char* sessionNonce = std::getenv("GPTB_SESSION_NONCE");
-
-    if(sessionNonce != nullptr && *sessionNonce != '\0') {
-        std::cout << "Already inside a gptbridge managed shell\n";
-        return 1;
-    }
-
-    std::string projectName;
-
-    if(argc == 3) {
-        // An explicitly named project must already exist in the registry
-        projectName = argv[2];
-
+        // Refuse unknown names before scanning session state.
         if(!projectExists(projectName)) {
             std::cout << "Project not found: " << projectName << '\n';
             return 1;
         }
 
-        // Make the requested project active for this terminal session
-        setActiveProjectForCurrentSession(projectName);
-    }
-    else {
-        // Without a project arguement, restore the project already saved for
-        // this terminal session
-        projectName = getActiveProjectForCurrentSession();
+        // A registered project cannot be removed while any saved logical session
+        // still points to it, because that would leave persistent session state
+        // referring to a project that no longer exists in the global registry.
+        const std::vector<SessionInfo> sessions = listSessions();
 
-        if(projectName.empty()) {
-            std::cout << "No project to restore for this session\n";
+        for(const SessionInfo& session : sessions) {
+            if(session.activeProject == projectName) {
+                std::cout << "Project is still referenced by session: "
+                          << session.id << '\n';
+                return 1;
+            }
+        }
+
+        // Ask before modifying the global project registry.
+        std::cout << "Remove project: " << projectName << "?\n";
+        std::cout << "This unregisters the project from gptbridge but does not "
+                     "delete its files. [y/N]: ";
+
+        std::string confirmation;
+        std::getline(std::cin, confirmation);
+
+        if(confirmation != "y" && confirmation != "Y") {
+            std::cout << "Project removal cancelled\n";
+            return 0;
+        }
+
+        // removeProject() returns false only if the project disappeared between
+        // validation above and the registry update.
+        if(!removeProject(projectName)) {
+            std::cout << "Project not found: " << projectName << '\n';
             return 1;
         }
 
-        // Session state can outlive a project registry entry, so verify that
-        // the saved project is still registered before entering the shell
-        if(!projectExists(projectName)) {
-            std::cout << "Saved project is no longer registered: " << projectName << '\n';
-            return 1;
-        }
+        std::cout << "Removed project: " << projectName << '\n';
+        return 0;
+    }
+}
+
+
+/**
+ * parseProjectCommand()
+ * Converts a project subcommand string into the corresponding ProjectCommand
+ * value
+ */
+ProjectCommand parseProjectCommand(const std::string& command) {
+    if(command == "add") { return ProjectCommand::Add; }
+    if(command == "list") { return ProjectCommand::List; }
+    if(command == "remove") { return ProjectCommand::Remove; }
+
+    return ProjectCommand::Unknown;
+}
+
+
+/**
+ * handleProjectCommand()
+ * Validates and dispatches commands under the `gptb project` namespace.
+ */
+int handleProjectCommand(int argc, char* argv[]) {
+    // "gptb project" requires a project-management subcommand.
+    if(argc < 3) {
+        std::cout << "Usage: gptb project <add|list|remove>\n";
+        return 1;
     }
 
-    std::cout << "Restoring project: " << projectName << '\n';
+    const ProjectCommand projectCommand =
+            parseProjectCommand(argv[2]);
 
-    return runManagedShell();
+    switch(projectCommand) {
+        case ProjectCommand::Add:
+            return addProjectCommand(argc, argv);
+
+        case ProjectCommand::List:
+            return listProjectCommand(argc);
+
+        case ProjectCommand::Remove:
+            return removeProjectCommand(argc, argv);
+
+        case ProjectCommand::Unknown:
+            std::cout << "Unknown project command: " << argv[2] << '\n';
+            return 1;
+    }
+
+    // All enum values are handled above. Keep a defensive fallback for future
+    // additions to ProjectCommand.
+    return 1;
 }

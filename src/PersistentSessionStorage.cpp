@@ -1,9 +1,10 @@
 #include "PersistentSessionStorage.hpp"
 
-#include "Config.hpp"
 #include "SessionManager.hpp"
 #include "Storage.hpp"
 
+#include <optional>
+#include <stdexcept>
 #include <utility>
 
 
@@ -18,41 +19,44 @@ PersistentSessionStorage::PersistentSessionStorage(
 
 /**
  * forCurrentSession()
- * Resolves persistent storage for the logical session associated with
- * the current CLI process
+ * Resolves persistent storage for the logical session attached to the
+ * current managed shell
  */
 PersistentSessionStorage PersistentSessionStorage::forCurrentSession() {
-    // Global mode deliberately has no terminal-specific identity. Avoid
-    // resolving a TTY because one is neither required nor meaningful here
-    if(getSessionMode() == SessionMode::Global) {
-        return PersistentSessionStorage(getStorageRoot() / "global-session");
+    // Persistent "current session" storage only exists while this process is
+    // running inside a managed logical gptbridge session
+    const std::optional<std::string> sessionId = getCurrentSessionId();
+
+    if(!sessionId.has_value()) {
+        throw std::runtime_error("No logical gptbridge session is attached to the current shell");
     }
 
-    // Per-terminal mode uses the logical gptbridge session ID. Inside a managed
-    // shell this may come from GPTB_SESSION_ID, otherwise it comes from the TTY
-    const std::string sessionId = getCurrentSessionId();
-
-    return PersistentSessionStorage(getStorageRoot() / "sessions" / sessionId);
+    return forExplicitSessionId(*sessionId);
 }
 
 
 /**
  * forExplicitSessionId()
  * Resolves persistent storage for a caller that supplies the logical session
- * identity itself, such as the MCP server
+ * identity explicitly
  */
 PersistentSessionStorage PersistentSessionStorage::forExplicitSessionId(const std::string& sessionId) {
-    // Keep the explicit session API invariant that every supplied session ID is
-    // structurally valid, even when Global mode does not use it in the path
+    // Reject malformed logical session IDs before using one in a storage path
     validateSessionId(sessionId);
 
-    // All logical sessions share the same persistent storage in Global mode
-    if(getSessionMode() == SessionMode::Global) {
-        return PersistentSessionStorage(getStorageRoot() / "global-session");
-    }
-
-    // Per-terminal mode stores each logical session beneath its own directory
+    // Every logical session owns its own persistent directory under sessions/<id>
     return PersistentSessionStorage(getStorageRoot() / "sessions" / sessionId);
+}
+
+
+/**
+ * getSessionId()
+ * Returns the logical session identifier represented by this storage object
+ */
+std::string PersistentSessionStorage::getSessionId() const {
+    // Each logical session's directory name is its stable session ID,
+    // for example ~/.gptbridge/sessions/s-0001 -> "s-0001"
+    return sessionDirectory_.filename().string();
 }
 
 
