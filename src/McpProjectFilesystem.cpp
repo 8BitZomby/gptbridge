@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 
@@ -49,6 +51,52 @@ namespace {
         return std::find(buffer.begin(), buffer.begin() + bytesRead, '\0') != buffer.begin() + bytesRead;
     }
 
+
+    /**
+     * containsPrivateKeyBlock()
+     * Returns true when text contains a complete recognized PEM/OpenSSH
+     * private-key block with matching BEGIN and END boundary lines.
+     */
+    bool containsPrivateKeyBlock(const std::string& text) {
+        // Supported private-key boundary pairs.
+        constexpr std::array<std::pair<std::string_view, std::string_view>, 4> boundaries = {{
+            {"-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"},
+            {"-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----"},
+            {"-----BEGIN OPENSSH PRIVATE KEY-----", "-----END OPENSSH PRIVATE KEY-----"},
+            {"-----BEGIN EC PRIVATE KEY-----", "-----END EC PRIVATE KEY-----"}
+        }};
+
+        // Record which opening boundaries have already appeared.
+        std::array<bool, boundaries.size()> openBlocks{};
+
+        // Inspect complete lines so marker strings embedded in source code do not match.
+        std::istringstream input(text);
+        std::string line;
+
+        while(std::getline(input, line)) {
+            // Remove the carriage return left by getline() for CRLF line endings.
+            if(!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+
+            // Check the current line against each supported key format.
+            for(std::size_t index = 0; index < boundaries.size(); ++index) {
+                const auto& [beginMarker, endMarker] = boundaries[index];
+
+                // Remember a complete opening boundary.
+                if(line == beginMarker) {
+                    openBlocks[index] = true;
+                }
+
+                // A matching closing boundary completes the private-key block.
+                else if(openBlocks[index] && line == endMarker) {
+                    return true;
+                }
+            }
+        }
+        // No complete recognized private-key block was found.
+        return false;
+    }
 }
 
 
@@ -216,12 +264,24 @@ McpProjectFileResult readMcpProjectFile(
         };
     }
 
+    // Read the complete file so private-key content can be checked before
+    // anything is returned through MCP.
     std::ostringstream buffer;
     buffer << input.rdbuf();
 
+    const std::string contents = buffer.str();
+
+    // Reject files containing a complete recognized private-key block.
+    if(containsPrivateKeyBlock(contents)) {
+        return {
+            false,
+            "Requested project file contains private key material"
+        };
+    }
+
     return {
         true,
-        buffer.str()
+        contents
     };
 }
 

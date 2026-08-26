@@ -473,6 +473,15 @@ namespace {
             std::string("binary\0contents\n", 16)
         );
 
+        // Visible source file containing a complete private-key block used to verify
+        // that MCP refuses to expose the file contents.
+        project.writeFile(
+            "private-key.cpp",
+            "-----BEGIN PRIVATE KEY-----\n"
+            "example-private-key-material\n"
+            "-----END PRIVATE KEY-----\n"
+        );
+
         // Block only ignored.cpp through the project-local ignore policy.
         project.writeGptIgnore(
             "ignored.cpp\n"
@@ -515,6 +524,26 @@ namespace {
             binaryRead.text ==
                 "Requested project file appears to be binary",
             "binary reads should report the binary-file policy failure"
+        );
+
+        // Attempt to read the visible private-key fixture.
+        const McpProjectFileResult privateKeyRead =
+            readMcpProjectFile(
+                project.path(),
+                "private-key.cpp"
+            );
+
+        // Private-key material must not be exposed through MCP.
+        expectFalse(
+            privateKeyRead.success,
+            "files containing private-key material should not be directly readable"
+        );
+
+        // Private-key rejection should report the specific policy that blocked the file.
+        expectTrue(
+            privateKeyRead.text ==
+                "Requested project file contains private key material",
+            "private-key reads should report the content-policy failure"
         );
 
         // Attempt to read a file explicitly excluded by .gptignore.
