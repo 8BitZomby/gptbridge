@@ -287,24 +287,40 @@ SessionAttachmentRegistration::SessionAttachmentRegistration(
     const std::string contents = record.dump(4) + '\n';
 
     // Write the complete attachment record through the descriptor that also
-    // owns the liveness lock
-    const ssize_t bytesWritten = ::write(
-        lockDescriptor_,
-        contents.data(),
-        contents.size()
-    );
+    // owns the liveness lock. write() may transfer fewer bytes than requested,
+    // so continue until every byte has been stored.
+    std::size_t totalBytesWritten = 0;
 
-    if(bytesWritten != static_cast<ssize_t>(contents.size())) {
-        ::flock(lockDescriptor_, LOCK_UN);
-        ::close(lockDescriptor_);
-        lockDescriptor_ = -1;
+    while(totalBytesWritten < contents.size()) {
+        const ssize_t bytesWritten = ::write(
+            lockDescriptor_,
+            contents.data() + totalBytesWritten,
+            contents.size() - totalBytesWritten
+        );
 
-        // Cleanup is best-effort so a removal failure cannot hide the original
-        // attachment-write error
-        std::error_code cleanupError;
-        std::filesystem::remove(attachmentPath_, cleanupError);
+        // A signal may interrupt write() before any data is transferred.
+        // Retry that operation without treating it as a persistent failure.
+        if(bytesWritten == -1 && errno == EINTR) {
+            continue;
+        }
 
-        throw std::runtime_error("Failed to write session attachment record");
+        // Any other write error, or a zero-byte write that makes no progress,
+        // means the complete attachment record cannot be stored safely.
+        if(bytesWritten <= 0) {
+            ::flock(lockDescriptor_, LOCK_UN);
+            ::close(lockDescriptor_);
+            lockDescriptor_ = -1;
+
+            // Cleanup is best-effort so a removal failure cannot hide the original
+            // attachment-write error.
+            std::error_code cleanupError;
+            std::filesystem::remove(attachmentPath_, cleanupError);
+
+            throw std::runtime_error("Failed to write session attachment record");
+        }
+
+        // Advance past the bytes successfully written by this operation.
+        totalBytesWritten += static_cast<std::size_t>(bytesWritten);
     }
 
     // Flush the runtime metadata before the attachment is considered active
