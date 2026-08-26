@@ -201,7 +201,7 @@ void McpServer::handleInitialize(const nlohmann::json& message) {
         }},
         {"serverInfo", {
             {"name", "gptbridge"},
-            {"version", "0.2.4"}
+            {"version", "0.2.5"}
         }}
     };
 

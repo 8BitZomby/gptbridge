@@ -371,6 +371,12 @@ namespace {
             "int internalTarget = 7;\n"
         );
 
+        // Create a visible file containing a NUL byte so it is classified as binary
+        project.writeFile(
+            "binary.cpp",
+            std::string("binary\0contents\n", 16)
+        );
+
         project.writeGptIgnore(
             "ignored.cpp\n"
         );
@@ -389,6 +395,26 @@ namespace {
         expectTrue(
             normalRead.text == "int visible = 42;\n",
             "successful reads should return the complete file contents"
+        );
+
+        // Attempt to read the visible binary file through the MCP filesystem policy
+        const McpProjectFileResult binaryRead =
+            readMcpProjectFile(
+                project.path(),
+                "binary.cpp"
+            );
+
+        // Binary files must be rejected instead of returned as MCP text
+        expectFalse(
+            binaryRead.success,
+            "binary project files should not be directly readable"
+        );
+
+        // The rejection should identify the binary-file policy specifically
+        expectTrue(
+            binaryRead.text ==
+                "Requested project file appears to be binary",
+            "binary reads should report the binary-file policy failure"
         );
 
         const McpProjectFileResult ignoredRead =
@@ -604,6 +630,13 @@ namespace {
             "needle internal\n"
         );
 
+        // Create a binary file containing the search term before its NUL byte.
+        // This confirms search skips the whole file rather than matching its text-like bytes
+        project.writeFile(
+            "binary.cpp",
+            std::string("needle\0binary\n", 14)
+        );
+
         project.writeGptIgnore(
             "ignored.cpp\n"
         );
@@ -631,6 +664,12 @@ namespace {
                 "src/second.cpp:1: needle second"
             ) != std::string::npos,
             "search should inspect multiple visible project files"
+        );
+
+        // The binary fixture contains "needle", but it must not appear in search results
+        expectTrue(
+            normalSearch.text.find("binary.cpp") == std::string::npos,
+            "binary files should not appear in search results"
         );
 
         expectTrue(
