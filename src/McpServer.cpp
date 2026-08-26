@@ -1,20 +1,15 @@
 #include "McpServer.hpp"
 
-#include "GptIgnore.hpp"
 #include "McpProjectFilesystem.hpp"
 #include "McpState.hpp"
 #include "PersistentSessionStorage.hpp"
 #include "ProjectManager.hpp"
-#include "ProjectVisibility.hpp"
-#include "SensitivePath.hpp"
 #include "SessionManager.hpp"
 #include "TerminalContext.hpp"
 #include "TerminalInteraction.hpp"
 
-#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <optional>
 #include <sstream>
