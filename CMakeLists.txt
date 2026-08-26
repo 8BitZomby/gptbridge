@@ -63,6 +63,7 @@ add_executable(gptb
     src/InitCommand.cpp
     src/main.cpp
     src/McpCommands.cpp
+    src/McpProjectFilesystem.cpp
     src/McpServer.cpp
     src/McpState.cpp
     src/PersistentSessionStorage.cpp
@@ -107,6 +108,7 @@ if(BUILD_TESTING)
     add_executable(mcp_filesystem_policy_tests
         tests/McpFilesystemPolicyTests.cpp
         src/GptIgnore.cpp
+        src/McpProjectFilesystem.cpp
         src/ProjectVisibility.cpp
         src/SensitivePath.cpp
     )

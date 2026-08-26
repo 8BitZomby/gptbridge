@@ -1,6 +1,7 @@
 #include "McpServer.hpp"
 
 #include "GptIgnore.hpp"
+#include "McpProjectFilesystem.hpp"
 #include "McpState.hpp"
 #include "PersistentSessionStorage.hpp"
 #include "ProjectManager.hpp"
@@ -929,126 +930,24 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
             return;
         }
 
-        // Normalize the client-supplied path before resolving symlinks so policy
-        // checks can also be applied to the path the client actually requested.
-        const std::filesystem::path normalizedRequestedPath =
-            requestedPath.lexically_normal();
-
-        // Reject paths that lexically escape above the registered project root.
-        if(normalizedRequestedPath.empty() ||
-           normalizedRequestedPath == "." ||
-           *normalizedRequestedPath.begin() == "..") {
-
-            sendToolError(message["id"], "Requested project path escapes the active project");
-            return;
-        }
-
-        // Resolve the registered project root using the non-throwing filesystem
-        // overload so a filesystem failure becomes an MCP tool error.
-        std::error_code projectPathError;
-        const std::filesystem::path projectPath =
-            std::filesystem::canonical(
+        // Execute the filesystem operation independently from MCP transport so the
+        // same containment and visibility behavior can be regression-tested directly.
+        const McpProjectFileResult fileResult =
+            readMcpProjectFile(
                 getProjectPath(activeProject),
-                projectPathError
+                requestedPath
             );
 
-        if(projectPathError) {
-            sendToolError(message["id"], "Failed to resolve active project path");
-            return;
-        }
-
-        // Resolve symlinks and relative components in the requested path.
-        std::error_code filePathError;
-        const std::filesystem::path filePath =
-            std::filesystem::weakly_canonical(
-                projectPath / normalizedRequestedPath,
-                filePathError
+        if(!fileResult.success) {
+            sendToolError(
+                message["id"],
+                fileResult.text
             );
-
-        if(filePathError) {
-            sendToolError(message["id"], "Failed to resolve requested project path");
             return;
         }
 
-        // Convert the resolved target back into a project-relative path so a symlink
-        // that points outside the registered project can be rejected.
-        std::error_code relativePathError;
-        const std::filesystem::path relativePath =
-            std::filesystem::relative(
-                filePath,
-                projectPath,
-                relativePathError
-            );
+        const std::string& contents = fileResult.text;
 
-        if(relativePathError ||
-           relativePath.empty() ||
-           *relativePath.begin() == "..") {
-
-            sendToolError(message["id"], "Requested project path escapes the active project");
-            return;
-        }
-
-        // Apply .gptignore and visibility rules to both the requested alias path and
-        // the resolved target path. This prevents an in-project symlink from being
-        // used to bypass either policy.
-        const GptIgnore ignoreRules(projectPath);
-
-        if(ignoreRules.isIgnored(normalizedRequestedPath) ||
-           ignoreRules.isIgnored(relativePath)) {
-
-            sendToolError(message["id"], "Requested project file is ignored by .gptignore");
-            return;
-        }
-
-        if(!isProjectPathVisible(normalizedRequestedPath) ||
-           !isProjectPathVisible(relativePath)) {
-
-            sendToolError(message["id"], "Requested project file is not visible to MCP");
-            return;
-        }
-
-        // Only regular files can be returned. Use the error-code overload so missing
-        // or inaccessible files do not throw out of the MCP tool operation.
-        std::error_code fileTypeError;
-        const bool isRegularFile =
-            std::filesystem::is_regular_file(filePath, fileTypeError);
-
-        if(fileTypeError || !isRegularFile) {
-            sendToolError(message["id"], "Requested project file does not exist or is not a regular file");
-            return;
-        }
-
-        // Keep direct reads bounded just like project search so one unusually large
-        // file cannot cause an unbounded MCP response or large in-memory allocation
-        constexpr std::uintmax_t maxFileSize = 1024 * 1024;
-
-        std::error_code fileSizeError;
-        const std::uintmax_t fileSize = std::filesystem::file_size(filePath, fileSizeError);
-
-        // Ensure file size received without error
-        if(fileSizeError) {
-            sendToolError(message["id"], "Failed to determine requested project file size");
-            return;
-        }
-
-        // Ensure files are not over 1 MiB
-        if(fileSize > maxFileSize) {
-            sendToolError(message["id"], "Requested project file exceeds the 1 MiB read limit");
-            return;
-        }
-
-        std::ifstream input(filePath);
-
-        if(!input) {
-            sendToolError(message["id"], "Failed to open requested project file");
-            return;
-        }
-
-        // Read the complete text file into memory for the MCP response
-        std::ostringstream buffer;
-        buffer << input.rdbuf();
-
-        const std::string contents = buffer.str();
 
         // Return the file contents as a normal MCP text content block
         const nlohmann::json result = {

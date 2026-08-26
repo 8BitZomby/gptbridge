@@ -1,7 +1,9 @@
 #include "GptIgnore.hpp"
+#include "McpProjectFilesystem.hpp"
 #include "ProjectVisibility.hpp"
 #include "SensitivePath.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -78,16 +80,80 @@ namespace {
 
             void writeGptIgnore(const std::string& contents) const {
                 std::ofstream output(projectPath / ".gptignore");
-
                 if(!output) {
                     throw std::runtime_error(
                         "Failed to create temporary .gptignore"
+                    );
+                }
+                output << contents;
+            }
+
+            /**
+             * writeFile()
+             * Creates a project-relative test file, including any required parent
+             * directories, so filesystem-policy cases can build isolated fixtures.
+             */
+            void writeFile(
+                    const std::filesystem::path& relativePath,
+                    const std::string& contents) const {
+
+                const std::filesystem::path filePath =
+                    projectPath / relativePath;
+
+                if(filePath.has_parent_path()) {
+                    std::filesystem::create_directories(
+                        filePath.parent_path()
+                    );
+                }
+
+                std::ofstream output(
+                    filePath,
+                    std::ios::binary
+                );
+
+                if(!output) {
+                    throw std::runtime_error(
+                        "Failed to create temporary project file"
                     );
                 }
 
                 output << contents;
             }
 
+
+            /**
+             * writeLargeFile()
+             * Creates a file of an exact byte size without constructing a second large
+             * in-memory string in each test case.
+             */
+            void writeLargeFile(
+                    const std::filesystem::path& relativePath,
+                    std::uintmax_t size) const {
+
+                const std::filesystem::path filePath =
+                    projectPath / relativePath;
+
+                if(filePath.has_parent_path()) {
+                    std::filesystem::create_directories(
+                        filePath.parent_path()
+                    );
+                }
+
+                std::ofstream output(
+                    filePath,
+                    std::ios::binary
+                );
+
+                if(!output) {
+                    throw std::runtime_error(
+                        "Failed to create temporary large project file"
+                    );
+                }
+
+                for(std::uintmax_t index = 0; index < size; ++index) {
+                    output.put('A');
+                }
+            }
 
         private:
             std::filesystem::path projectPath;
@@ -277,6 +343,230 @@ namespace {
         );
     }
 
+    /**
+     * testMcpProjectFileReads()
+     * Verifies direct MCP project reads against the same containment, visibility,
+     * ignore, symlink, and size policies used by the live MCP server.
+     */
+    void testMcpProjectFileReads() {
+        TemporaryProject project;
+
+        project.writeFile(
+            "src/visible.cpp",
+            "int visible = 42;\n"
+        );
+
+        project.writeFile(
+            "ignored.cpp",
+            "int ignored = 1;\n"
+        );
+
+        project.writeFile(
+            ".env",
+            "SECRET=value\n"
+        );
+
+        project.writeFile(
+            "internal-target.cpp",
+            "int internalTarget = 7;\n"
+        );
+
+        project.writeGptIgnore(
+            "ignored.cpp\n"
+        );
+
+        const McpProjectFileResult normalRead =
+            readMcpProjectFile(
+                project.path(),
+                "src/visible.cpp"
+            );
+
+        expectTrue(
+            normalRead.success,
+            "ordinary visible project files should be readable"
+        );
+
+        expectTrue(
+            normalRead.text == "int visible = 42;\n",
+            "successful reads should return the complete file contents"
+        );
+
+        const McpProjectFileResult ignoredRead =
+            readMcpProjectFile(
+                project.path(),
+                "ignored.cpp"
+            );
+
+        expectFalse(
+            ignoredRead.success,
+            ".gptignore should block direct project-file reads"
+        );
+
+        expectTrue(
+            ignoredRead.text ==
+                "Requested project file is ignored by .gptignore",
+            "ignored reads should report the .gptignore policy failure"
+        );
+
+        const McpProjectFileResult sensitiveRead =
+            readMcpProjectFile(
+                project.path(),
+                ".env"
+            );
+
+        expectFalse(
+            sensitiveRead.success,
+            "sensitive project files should not be directly readable"
+        );
+
+        expectTrue(
+            sensitiveRead.text ==
+                "Requested project file is not visible to MCP",
+            "sensitive reads should report the visibility failure"
+        );
+
+        const McpProjectFileResult escapingRead =
+            readMcpProjectFile(
+                project.path(),
+                "../outside.cpp"
+            );
+
+        expectFalse(
+            escapingRead.success,
+            "lexical parent traversal should not escape the project"
+        );
+
+        expectTrue(
+            escapingRead.text ==
+                "Requested project path escapes the active project",
+            "lexical project escapes should report the containment failure"
+        );
+
+        std::error_code internalSymlinkError;
+        std::filesystem::create_symlink(
+            project.path() / "internal-target.cpp",
+            project.path() / "internal-link.cpp",
+            internalSymlinkError
+        );
+
+        expectFalse(
+            static_cast<bool>(internalSymlinkError),
+            "internal symlink fixture should be created successfully"
+        );
+
+        if(!internalSymlinkError) {
+            const McpProjectFileResult internalSymlinkRead =
+                readMcpProjectFile(
+                    project.path(),
+                    "internal-link.cpp"
+                );
+
+            expectTrue(
+                internalSymlinkRead.success,
+                "symlinks to visible files inside the project should be readable"
+            );
+
+            expectTrue(
+                internalSymlinkRead.text ==
+                    "int internalTarget = 7;\n",
+                "internal symlink reads should return the resolved target contents"
+            );
+        }
+
+        const std::filesystem::path externalPath =
+            project.path().parent_path() /
+            (project.path().filename().string() + "-outside.cpp");
+
+        {
+            std::ofstream externalOutput(externalPath);
+
+            if(!externalOutput) {
+                throw std::runtime_error(
+                    "Failed to create external symlink fixture"
+                );
+            }
+
+            externalOutput << "int outside = 9;\n";
+        }
+
+        std::error_code externalSymlinkError;
+        std::filesystem::create_symlink(
+            externalPath,
+            project.path() / "external-link.cpp",
+            externalSymlinkError
+        );
+
+        expectFalse(
+            static_cast<bool>(externalSymlinkError),
+            "external symlink fixture should be created successfully"
+        );
+
+        if(!externalSymlinkError) {
+            const McpProjectFileResult externalSymlinkRead =
+                readMcpProjectFile(
+                    project.path(),
+                    "external-link.cpp"
+                );
+
+            expectFalse(
+                externalSymlinkRead.success,
+                "symlinks resolving outside the project should be rejected"
+            );
+
+            expectTrue(
+                externalSymlinkRead.text ==
+                    "Requested project path escapes the active project",
+                "external symlinks should report the containment failure"
+            );
+        }
+
+        std::error_code externalRemovalError;
+        std::filesystem::remove(
+            externalPath,
+            externalRemovalError
+        );
+
+        constexpr std::uintmax_t oneMiB =
+            1024 * 1024;
+
+        project.writeLargeFile(
+            "exact-limit.cpp",
+            oneMiB
+        );
+
+        const McpProjectFileResult exactLimitRead =
+            readMcpProjectFile(
+                project.path(),
+                "exact-limit.cpp"
+            );
+
+        expectTrue(
+            exactLimitRead.success,
+            "a file exactly at the 1 MiB limit should remain readable"
+        );
+
+        project.writeLargeFile(
+            "over-limit.cpp",
+            oneMiB + 1
+        );
+
+        const McpProjectFileResult overLimitRead =
+            readMcpProjectFile(
+                project.path(),
+                "over-limit.cpp"
+            );
+
+        expectFalse(
+            overLimitRead.success,
+            "a file larger than 1 MiB should be rejected"
+        );
+
+        expectTrue(
+            overLimitRead.text ==
+                "Requested project file exceeds the 1 MiB read limit",
+            "oversized reads should report the direct-read size limit"
+        );
+    }
 }
 
 
@@ -285,6 +575,7 @@ int main() {
         testSensitivePaths();
         testProjectVisibility();
         testGptIgnorePatterns();
+        testMcpProjectFileReads();
     }
     catch(const std::exception& error) {
         std::cerr << "ERROR: " << error.what() << '\n';
