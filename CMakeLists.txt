@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(gptbridge VERSION 0.1.0 LANGUAGES CXX)
+project(gptbridge VERSION 0.2.0 LANGUAGES CXX)
 
 include(FetchContent)
 # Fetch the JSON library at configure time so it does not require
@@ -56,6 +56,7 @@ add_executable(gptb
     src/ContextCommands.cpp
     src/ControlProtocolParser.cpp
     src/ExecutablePath.cpp
+    src/GptIgnore.cpp
     src/HelpCommand.cpp
     src/InitCommand.cpp
     src/main.cpp

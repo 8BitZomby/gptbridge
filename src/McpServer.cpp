@@ -1,5 +1,6 @@
 #include "McpServer.hpp"
 
+#include "GptIgnore.hpp"
 #include "McpState.hpp"
 #include "PersistentSessionStorage.hpp"
 #include "ProjectManager.hpp"
@@ -502,6 +503,9 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         // Resolve the registered project root before scanning its contents
         const std::filesystem::path projectPath = getProjectPath(activeProject);
 
+        // Parse project-local ignore rules once for this complete listing operation
+        const GptIgnore ignoreRules(projectPath);
+
         std::vector<std::string> files;
 
         // Walk the project recursively so files in nested source directories
@@ -511,6 +515,17 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
             ++itr) {
 
             const std::filesystem::path entryPath = itr->path();
+
+            // Resolve every entry relative to the registered project root so both
+            // directory pruning and file filtering use the same .gptignore namespace
+            const std::filesystem::path relativePath = std::filesystem::relative(entryPath, projectPath);
+
+            // Ignored directories can be pruned completely because .gptignore v1 does
+            // not support negated rules that could re-include one of their descendants
+            if(itr->is_directory() && ignoreRules.isIgnored(relativePath, true)) {
+                itr.disable_recursion_pending();
+                continue;
+            }
 
             // Skip directories containing repository metadata or generated build
             if(itr->is_directory()) {
@@ -537,8 +552,10 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
                 continue;
             }
 
-            // Return path relative to the project root rather than absolute paths
-            const std::filesystem::path relativePath = std::filesystem::relative(entryPath, projectPath);
+            // Project-local ignore rules hide matching files from MCP listings
+            if(ignoreRules.isIgnored(relativePath)) {
+                continue;
+            }
 
             // Only expose files allowed by the shared project-visibility policy
             if(!isProjectPathVisible(relativePath)) {
@@ -620,6 +637,9 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
 
         const std::filesystem::path projectPath = std::filesystem::canonical(getProjectPath(activeProject));
 
+        // Load .gptignore once rather than reopening it for every searched entry
+        const GptIgnore ignoreRules(projectPath);
+
         constexpr std::size_t maxResults = 50;
         constexpr std::uintmax_t maxFileSize = 1024 * 1024;
 
@@ -634,19 +654,28 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
             const std::filesystem::path entryPath = itr->path();
             const std::filesystem::path relativePath = std::filesystem::relative(entryPath, projectPath);
 
-            // Avoid entering generated, repository, cache, or sensitive directories
+            // Never descend into generated/cache/sensitive directories or directories
+            // explicitly excluded by this project's .gptignore rules
             if(itr->is_directory()) {
                 const std::string directoryName = entryPath.filename().string();
 
-                if(directoryName == "build" || directoryName == ".cache" || isSensitiveProjectPath(relativePath)) {
+                if(directoryName == "build" ||
+                   directoryName == ".cache" ||
+                   isSensitiveProjectPath(relativePath) ||
+                   ignoreRules.isIgnored(relativePath, true)) {
+
                     itr.disable_recursion_pending();
                 }
-
                 continue;
             }
 
             // Search only ordinary files
             if(!itr->is_regular_file()) {
+                continue;
+            }
+
+            // Ignored files must not contribute search results
+            if(ignoreRules.isIgnored(relativePath)) {
                 continue;
             }
 
@@ -765,12 +794,22 @@ void McpServer::handleToolsCall(const nlohmann::json& message) {
         const std::filesystem::path projectPath = std::filesystem::canonical(getProjectPath(activeProject));
         const std::filesystem::path filePath = std::filesystem::weakly_canonical(projectPath / requestedPath);
 
+        // Use the same project-local ignore policy as listing and search
+        const GptIgnore ignoreRules(projectPath);
+
         // Convert the resolved file back into a path relative to the project root
         const std::filesystem::path relativePath = std::filesystem::relative(filePath, projectPath);
 
         // A path beginning with ".." escaped outside the active project
         if(relativePath.empty() || *relativePath.begin() == "..") {
             sendToolError(message["id"], "Requested project path escapes the active project");
+            return;
+        }
+
+        // A direct read must not bypass an exclusion that hides the same file from
+        // project listing and search operations
+        if(ignoreRules.isIgnored(relativePath)) {
+            sendToolError(message["id"], "Requested project file is ignored by .gptignore");
             return;
         }
 
