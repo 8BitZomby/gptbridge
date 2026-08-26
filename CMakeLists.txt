@@ -18,6 +18,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(CTest)
+
 # Re-run CMake configuration when the embedded zsh integration changes so a
 # normal build always regenerates the C++ header with the latest script.
 set_property(
@@ -61,6 +63,7 @@ add_executable(gptb
     src/InitCommand.cpp
     src/main.cpp
     src/McpCommands.cpp
+    src/McpProjectFilesystem.cpp
     src/McpServer.cpp
     src/McpState.cpp
     src/PersistentSessionStorage.cpp
@@ -100,3 +103,22 @@ target_link_libraries(gptb PRIVATE
     nlohmann_json::nlohmann_json
     "-framework Security"
 )
+
+if(BUILD_TESTING)
+    add_executable(mcp_filesystem_policy_tests
+        tests/McpFilesystemPolicyTests.cpp
+        src/GptIgnore.cpp
+        src/McpProjectFilesystem.cpp
+        src/ProjectVisibility.cpp
+        src/SensitivePath.cpp
+    )
+
+    target_include_directories(mcp_filesystem_policy_tests PRIVATE
+        include
+    )
+
+    add_test(
+        NAME mcp_filesystem_policy_tests
+        COMMAND mcp_filesystem_policy_tests
+    )
+endif()
