@@ -5,6 +5,7 @@
 
 
 enum class Command {
+    Ask,
     Capture,
     Clear,
     Help,

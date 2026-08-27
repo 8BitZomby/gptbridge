@@ -1,3 +1,4 @@
+#include "AskCommand.hpp"
 #include "CommandLine.hpp"
 #include "ContextCommands.hpp"
 #include "HelpCommand.hpp"
@@ -30,6 +31,7 @@ int main(int argc, char* argv[]) {
         // Command handler may throw for malformed JSON, filesystem failures,
         // or other storage errors. Handle those at the CLI boundary below.
         switch(command) {
+            case Command::Ask: return handleAskCommand(argc, argv);
             case Command::Capture: return handleCaptureCommand(argc, argv);
             case Command::Clear: return handleClearCommand(argc, argv);
             case Command::Help: return handleHelpCommand(argc, argv);

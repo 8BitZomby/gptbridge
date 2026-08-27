@@ -10,6 +10,7 @@ Command parseCommand(const std::string& command) {
     if(command == "--help") { return Command::Help; }
     if(command == "-V") { return Command::Version; }
     if(command == "--version") { return Command::Version; }
+    if(command == "ask") { return Command::Ask; }
     if(command == "capture") { return Command::Capture; }
     if(command == "clear") { return Command::Clear; }
     if(command == "init") { return Command::Init; }
