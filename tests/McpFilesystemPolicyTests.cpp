@@ -765,8 +765,8 @@ namespace {
     /**
      * testMcpProjectFileSearches()
      * Verifies project search filtering, symlink containment, size limits,
-     * binary filtering, result formatting, and the maximum-result boundary
-     * independently from MCP transport.
+     * binary and private-key filtering, result formatting, and the
+     * maximum-result boundary independently from MCP transport.
      */
     void testMcpProjectFileSearches() {
         // Create one isolated project containing every search-policy fixture.
@@ -810,6 +810,15 @@ namespace {
             std::string("needle\0binary\n", 14)
         );
 
+        // Visible text file containing a complete private-key block and the
+        // common search query inside its key material.
+        project.writeFile(
+            "private-key.cpp",
+            "-----BEGIN PRIVATE KEY-----\n"
+            "needle-private-key-material\n"
+            "-----END PRIVATE KEY-----\n"
+        );
+
         // Hide ignored.cpp while leaving the other fixtures visible.
         project.writeGptIgnore(
             "ignored.cpp\n"
@@ -848,6 +857,13 @@ namespace {
         expectTrue(
             normalSearch.text.find("binary.cpp") == std::string::npos,
             "binary files should not appear in search results"
+        );
+
+        // Files containing recognized private-key blocks must be skipped
+        // completely even when their key material contains the query.
+        expectTrue(
+            normalSearch.text.find("private-key.cpp") == std::string::npos,
+            "private-key files should not appear in search results"
         );
 
         // .gptignore must remove matching files from search results.
