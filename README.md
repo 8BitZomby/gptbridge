@@ -6,7 +6,7 @@ project files available through MCP-compatible workflows and `gptb ask`.
 
 The executable is named `gptb`.
 
-> **Current version:** 0.3.1
+> **Current version:** 0.3.2
 > **Status:** Active development
 
 ## Features
@@ -565,7 +565,8 @@ MCP project-file operations enforce several layers of protection:
 - project-local `.gptignore` rules are enforced;
 - direct file reads are limited to 1 MiB;
 - binary files are rejected by direct reads and skipped during project search;
-- direct reads reject recognized complete private-key blocks;
+- files containing recognized complete private-key blocks are rejected by direct
+  reads and skipped during project search;
 - project search skips files larger than 1 MiB and reports when files were
   skipped;
 - expected filesystem failures are handled through non-throwing filesystem

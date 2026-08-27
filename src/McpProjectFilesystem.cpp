@@ -412,33 +412,49 @@ McpProjectFileResult searchMcpProjectFiles(
                                 if(fileSize > maxFileSize) {
                                     ++oversizedFileCount;
                                 }
+
+                                // Binary files are excluded from text search.
                                 else if(!isBinaryFile(resolvedEntryPath)) {
                                     std::ifstream input(resolvedEntryPath);
 
                                     // Unreadable files are skipped without failing
                                     // the complete project search.
                                     if(input) {
-                                        std::string line;
-                                        std::size_t lineNumber = 0;
+                                        // Read the complete file before exposing any
+                                        // individual matching lines.
+                                        std::ostringstream fileBuffer;
+                                        fileBuffer << input.rdbuf();
 
-                                        while(resultCount < maxResults &&
-                                              std::getline(input, line)) {
+                                        const std::string contents =
+                                            fileBuffer.str();
 
-                                            ++lineNumber;
+                                        // Private-key files are excluded from search
+                                        // entirely, matching the direct-read policy.
+                                        if(!containsPrivateKeyBlock(contents)) {
+                                            std::istringstream lines(contents);
+                                            std::string line;
+                                            std::size_t lineNumber = 0;
 
-                                            // Search is exact and case-sensitive.
-                                            if(line.find(query) == std::string::npos) {
-                                                continue;
+                                            // Search the validated text line by line.
+                                            while(resultCount < maxResults &&
+                                                  std::getline(lines, line)) {
+
+                                                ++lineNumber;
+
+                                                // Search is exact and case-sensitive.
+                                                if(line.find(query) == std::string::npos) {
+                                                    continue;
+                                                }
+
+                                                text << relativePath.generic_string()
+                                                     << ':'
+                                                     << lineNumber
+                                                     << ": "
+                                                     << line
+                                                     << '\n';
+
+                                                ++resultCount;
                                             }
-
-                                            text << relativePath.generic_string()
-                                                 << ':'
-                                                 << lineNumber
-                                                 << ": "
-                                                 << line
-                                                 << '\n';
-
-                                            ++resultCount;
                                         }
                                     }
                                 }
