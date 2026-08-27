@@ -13,68 +13,34 @@ int handleHelpCommand(int argc, char* argv[]) {
         std::cout << "Usage: gptb --help\n";
         return 1;
     }
-    // Display help output
+
+    // Display the command reference in a compact aligned layout.
     std::cout
-        << "gptb - terminal integration for ChatGPT\n"
+        << "gptb - terminal integration for AI clients\n"
         << '\n'
-        << "Usage:\n"
-        << "  gptb <command> [arguments]\n"
+        << "Usage: gptb <command> [arguments]\n"
         << '\n'
         << "Commands:\n"
-        << "  init <path> <project-name>\n"
-        << "      Register a project and create a new logical session.\n"
-        << '\n'
-        << "  restore [session-id]\n"
-        << "      Restore the most recent or explicitly requested saved session.\n"
-        << '\n'
-        << "  status\n"
-        << "      Show the session and project attached to this shell.\n"
-        << '\n'
-        << "  session list\n"
-        << "      List saved logical sessions and their runtime state.\n"
-        << '\n'
-        << "  session close <session-id>\n"
-        << "      Close a live session while preserving its saved data.\n"
-        << '\n'
-        << "  session delete <session-id>\n"
-        << "      Permanently delete an inactive logical session.\n"
-        << '\n'
-        << "  session restore [session-id]\n"
-        << "      Restore the most recent or explicitly requested saved session.\n"
-        << '\n'
-        << "  project list\n"
-        << "      List registered projects.\n"
-        << '\n'
-        << "  project add <name> <path>\n"
-        << "      Register a project without changing the current session.\n"
-        << '\n'
-        << "  project remove <name>\n"
-        << "      Unregister a project without deleting its files.\n"
-        << '\n'
-        << "  use <project-name|.>\n"
-        << "      Change the active project for the current session.\n"
-        << '\n'
-        << "  push [count|append|replace]\n"
-        << "      Push terminal interactions using the saved mode, or set the persistent push mode.\n"
-        << '\n'
-        << "  show\n"
-        << "      Display persistent terminal context.\n"
-        << '\n'
-        << "  clear\n"
-        << "      Clear persistent terminal context.\n"
-        << '\n'
-        << "  ask <question...>\n"
-        << "      Ask Claude about the active project and pushed terminal context.\n"
-        << '\n'
-        << "  mcp sync\n"
-        << "      Synchronize MCP with the logical session attached to this shell\n"
+        << "  ask <question...>                 Ask Claude about the active project and pushed terminal context\n"
+        << "  clear                             Clear persistent terminal context\n"
+        << "  init <path> <project-name>        Register a project and create a new logical session\n"
+        << "  mcp sync                          Synchronize MCP with the logical session attached to this shell\n"
+        << "  project add <name> <path>         Register a project without changing the current session\n"
+        << "  project list                      List registered projects\n"
+        << "  project remove <name>             Unregister a project without deleting its files\n"
+        << "  push [count|append|replace]        Push terminal interactions or set the persistent push mode\n"
+        << "  restore [session-id]              Restore the most recent or explicitly requested saved session\n"
+        << "  session close <session-id>        Close a live session while preserving its saved data\n"
+        << "  session delete <session-id>       Permanently delete an inactive logical session\n"
+        << "  session list                      List saved logical sessions and their runtime state\n"
+        << "  session restore [session-id]      Restore the most recent or explicitly requested saved session\n"
+        << "  show                              Display persistent terminal context\n"
+        << "  status                            Show the session and project attached to this shell\n"
+        << "  use <project-name|.>              Change the active project for the current session\n"
         << '\n'
         << "Options:\n"
-        << "  -h, --help\n"
-        << "      Show this help.\n"
-        << '\n'
-        << "  -V, --version\n"
-        << "      Show the gptb version.\n";
+        << "  -h, --help                        Show this help\n"
+        << "  -V, --version                     Show the gptb version\n";
 
     return 0;
 }

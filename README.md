@@ -1,12 +1,12 @@
 # gptbridge
 
-`gptbridge` is a C++ terminal integration tool that captures shell interactions
-and makes selected terminal context and project files available to
-MCP-compatible clients.
+`gptbridge` is a C++ terminal integration tool that captures shell interactions,
+manages persistent logical sessions, and makes selected terminal context and
+project files available through MCP-compatible workflows and `gptb ask`.
 
 The executable is named `gptb`.
 
-> **Current version:** 0.2.1  
+> **Current version:** 0.3.1
 > **Status:** Active development
 
 ## Features
@@ -17,10 +17,16 @@ The executable is named `gptb`.
 - Separates complete terminal history from intentionally pushed terminal context.
 - Supports persistent `append` and `replace` push modes.
 - Exposes terminal context and project files through an MCP server.
+- Supports `gptb ask` for one-shot Claude Code questions using the active project
+  and explicitly pushed terminal context.
+- Runs `gptb ask` through the same read-only gptbridge MCP boundary used by
+  external MCP clients.
 - Supports project-local `.gptignore` rules.
 - Restricts MCP filesystem access using path-containment, symlink,
-  sensitive-path, visibility, and file-size checks.
+  sensitive-path, visibility, file-size, binary-file, and private-key checks.
 - Preserves logical sessions independently from individual terminal attachments.
+- Writes persistent gptbridge JSON state atomically to reduce the risk of
+  partially written state files.
 
 ## Requirements
 
@@ -31,6 +37,12 @@ gptbridge currently targets macOS and requires:
 - zsh.
 
 `nlohmann/json` is retrieved automatically through CMake `FetchContent`.
+
+`gptb ask` additionally requires Claude Code. gptbridge first looks for a
+`claude` executable on `PATH` and, on macOS, can fall back to the Claude Code
+runtime bundled with Claude Desktop.
+
+Claude Code must already be authenticated before `gptb ask` can use it.
 
 ## Setup
 
@@ -238,6 +250,44 @@ selected interactions.
 
 Project files are exposed independently through the MCP project-file tools.
 
+## Asking Claude with `gptb ask`
+
+`gptb ask` sends a one-shot question to Claude Code while keeping project access
+behind gptbridge's existing MCP boundary.
+
+For example:
+
+```bash
+gptb ask "Why did the last build fail?"
+```
+
+The command uses the current logical gptbridge session and gives Claude access
+to:
+
+- the active project;
+- explicitly pushed terminal context;
+- permitted project-file listings;
+- permitted project-file search;
+- permitted individual project-file reads.
+
+`gptb ask` does not automatically expose the complete captured terminal
+history. Terminal context must first be selected with `gptb push`.
+
+For each invocation, gptbridge creates an in-memory MCP configuration that
+launches the current `gptb` executable as an MCP server and pins it to the
+current logical session with `GPTB_MCP_SESSION_ID`.
+
+Claude is launched in non-interactive print mode. The question is sent through
+Claude's standard input, while Claude's output and diagnostics remain attached
+to the current terminal.
+
+Each `gptb ask` invocation is independent and does not persist a Claude
+conversation.
+
+Claude's built-in tools are disabled for this workflow. Project and terminal
+context access is provided through gptbridge's existing read-only MCP tools, so
+the normal filesystem visibility and security rules continue to apply.
+
 ## How it works
 
 gptbridge runs an interactive zsh shell behind a pseudo-terminal (PTY).
@@ -423,10 +473,20 @@ terminal attachment
 
 A logical session therefore survives independently from a specific TTY.
 
+Logical sessions use stable generated identifiers such as `s-0001`; the
+identifier belongs to the saved session rather than to the terminal device
+currently attached to it.
+
+Persistent JSON state is written atomically so updates do not directly overwrite
+the previous state file in place.
+
 Closing a live session terminates its managed-shell attachment while preserving
 the saved session data.
 
 A preserved session can later be restored and attached to another terminal.
+
+Session attachment metadata is also written defensively so interrupted or
+partial low-level writes do not silently produce incomplete attachment records.
 
 Sessions can be inspected with:
 
@@ -504,6 +564,8 @@ MCP project-file operations enforce several layers of protection:
 - shared project-visibility rules are enforced;
 - project-local `.gptignore` rules are enforced;
 - direct file reads are limited to 1 MiB;
+- binary files are rejected by direct reads and skipped during project search;
+- direct reads reject recognized complete private-key blocks;
 - project search skips files larger than 1 MiB and reports when files were
   skipped;
 - expected filesystem failures are handled through non-throwing filesystem
@@ -600,6 +662,12 @@ current working directory.
 | `gptb push replace` | Set the persistent push mode to replace. |
 | `gptb show` | Display persistent terminal context. |
 | `gptb clear` | Clear persistent terminal context. |
+
+### Claude
+
+| Command | Description |
+| --- | --- |
+| `gptb ask <question...>` | Ask Claude Code about the active project and explicitly pushed terminal context. |
 
 ### MCP
 
